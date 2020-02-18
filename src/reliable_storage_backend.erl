@@ -59,6 +59,7 @@ init([]) ->
 
 handle_call({enqueue, Work}, _From, #state{reference=Reference}=State) ->
     %% TODO: Deduplicate here.
+    %% TODO: Replay once completed.
     lager:info("~p: enqueuing work.", [?MODULE, Work]),
 
     case dets:insert_new(Reference, Work) of 
@@ -144,7 +145,7 @@ handle_info(work, #state{reference=Reference}=State) ->
 
     %% Delete items outside of iterator to ensure delete is safe.
     lists:foreach(fun(Key) ->
-        dets:delete_object(Reference, Key)
+        dets:delete(Reference, Key)
     end, ItemsToDelete),
 
     %% Reschedule work.
