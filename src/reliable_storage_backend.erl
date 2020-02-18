@@ -58,6 +58,7 @@ init([]) ->
     end.
 
 handle_call({enqueue, Work}, _From, #state{reference=Reference}=State) ->
+    %% TODO: Deduplicate here.
     lager:info("~p: enqueuing work.", [?MODULE, Work]),
 
     case dets:insert_new(Reference, Work) of 
