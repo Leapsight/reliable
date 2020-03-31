@@ -92,7 +92,7 @@ handle_cast(Msg, State) ->
     {noreply, State}.
 
 handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
-    error_logger:format("~p: looking for work.", [?MODULE]),
+    % error_logger:format("~p: looking for work.", [?MODULE]),
 
     %% Iterate through work that needs to be done.
     %%
@@ -134,8 +134,8 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
                                     end
                                 end, Args0),
 
-                                error_logger:format("~p: trying to perform work: rpc to ~p, ~p:~p with args ~p", [?MODULE, Node, Module, Function, Args]),
-
+                                error_logger:format("~p: trying to perform work: rpc to ~p", [?MODULE, Node]),
+                                error_logger:format("~p: trying to perform work: => ~p:~p with args ~p", [?MODULE, Module, Function, Args]),
                                 Result = rpc:call(Node, Module, Function, Args),
                                 error_logger:format("~p: got result: ~p", [?MODULE, Result]),
 
