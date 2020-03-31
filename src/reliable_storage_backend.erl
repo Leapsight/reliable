@@ -5,7 +5,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start/0,
+-export([start_link/0,
          enqueue/1]).
 
 %% gen_server callbacks
@@ -16,9 +16,10 @@
          terminate/2,  
          code_change/3]).
 
+-define(TABLE, reliable_backend).
 -define(FILENAME, "reliable-backend-data").
 
--record(state, {reference}).
+-record(state, {reference, symbolics}).
 
 %% should be some sort of unique term identifier.
 -type work_id() :: term().
@@ -37,22 +38,35 @@
 
 %% API
 
-start() ->
+start_link() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
 -spec enqueue(work()) -> ok | {error, term()}.
 
 enqueue(Work) ->
-    gen_server:call({local, ?MODULE}, {work, Work}).
+    gen_server:call(?MODULE, {enqueue, Work}).
 
 %% gen_server callbacks
 
 init([]) ->
-    lager:info("~p: initializing.", [?MODULE]),
+    error_logger:format("~p: initializing.", [?MODULE]),
 
-    case dets:open_file(?FILENAME) of 
+    %% Initialize symbolic variable dict.
+    Symbolics0 = dict:new(),
+
+    {ok, RiakcPid} = riakc_pb_socket:start_link("127.0.0.1", 8087),
+    error_logger:format("~p: got connection to Riak: ~p", [?MODULE, RiakcPid]),
+    pong = riakc_pb_socket:ping(RiakcPid),
+
+    Symbolics = dict:store(riakc, RiakcPid, Symbolics0),
+
+    %% Schedule process to look for work.
+    schedule_work(),
+
+    %% Open storage in dets.
+    case dets:open_file(?TABLE, [{file, ?FILENAME}]) of 
         {ok, Reference} ->
-            {ok, #state{reference=Reference}};
+            {ok, #state{symbolics=Symbolics, reference=Reference}};
         {error, Reason} ->
             {stop, {error, Reason}}
     end.
@@ -60,7 +74,7 @@ init([]) ->
 handle_call({enqueue, Work}, _From, #state{reference=Reference}=State) ->
     %% TODO: Deduplicate here.
     %% TODO: Replay once completed.
-    lager:info("~p: enqueuing work.", [?MODULE, Work]),
+    error_logger:format("~p: enqueuing work: ~p", [?MODULE, Work]),
 
     case dets:insert_new(Reference, Work) of 
         true ->
@@ -70,15 +84,15 @@ handle_call({enqueue, Work}, _From, #state{reference=Reference}=State) ->
     end;
 
 handle_call(Request, _From, State) ->
-    lager:info("~p: unhandled call: ~p", [?MODULE, Request]),
+    error_logger:format("~p: unhandled call: ~p", [?MODULE, Request]),
     {reply, {error, not_implemented}, State}.
 
 handle_cast(Msg, State) ->
-    lager:info("~p: unhandled cast: ~p", [?MODULE, Msg]),
+    error_logger:format("~p: unhandled cast: ~p", [?MODULE, Msg]),
     {noreply, State}.
 
-handle_info(work, #state{reference=Reference}=State) ->
-    lager:info("~p: looking for work.", [?MODULE]),
+handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
+    error_logger:format("~p: looking for work.", [?MODULE]),
 
     %% Iterate through work that needs to be done.
     %%
@@ -86,46 +100,62 @@ handle_info(work, #state{reference=Reference}=State) ->
     %% Not sure. I'm assuming not for now since yielding the same item (insert case) 
     %% is not as bad as skipping an item (delete case.)
     %%
-    ItemsToDelete = dict:foldl(fun({WorkId, WorkItems}, ItemsToDelete0) ->
-        lager:info("~p: found work to be performed: ~p", [?MODULE, WorkId]),
+    ItemsToDelete = dets:foldl(fun({WorkId, WorkItems}, ItemsToDelete0) ->
+        error_logger:format("~p: found work to be performed: ~p", [?MODULE, WorkId]),
 
         {ItemCompleted, _} = lists:foldl(fun({WorkItemId, WorkItem, WorkItemResult}=LastWorkItem, {LastWorkItemCompleted0, WorkItemsCompleted}) ->
             %% Don't iterate if the last item wasn't completed.
             case LastWorkItemCompleted0 of 
                 false ->
-                    lager:info("~p: not attempting next item, since last failed.", [?MODULE]),
+                    error_logger:format("~p: not attempting next item, since last failed.", [?MODULE]),
                     {LastWorkItemCompleted0, WorkItemsCompleted ++ [LastWorkItem]};
                 true ->
-                    lager:info("~p: found work item to be performed: ~p", [?MODULE, WorkItem]),
+                    error_logger:format("~p: found work item to be performed: ~p", [?MODULE, WorkItem]),
 
                     case WorkItemResult of 
                         undefined ->
                             %% Destructure work to be performed.
-                            {Node, Module, Function, Args} = WorkItem,
+                            {Node, Module, Function, Args0} = WorkItem,
 
                             %% Attempt to perform work.
                             try
-                                lager:info("~p: trying to perform work.", [?MODULE]),
+                                %% Replace symbolic terms in the work item.
+                                Args = lists:map(fun(Arg) ->
+                                    case Arg of 
+                                        {symbolic, Symbolic} ->
+                                            case dict:find(Symbolic, Symbolics) of 
+                                                error ->
+                                                    Arg;
+                                                {ok, Value} ->
+                                                    Value
+                                            end;
+                                        _ ->
+                                            Arg
+                                    end
+                                end, Args0),
+
+                                error_logger:format("~p: trying to perform work: rpc to ~p, ~p:~p with args ~p", [?MODULE, Node, Module, Function, Args]),
+
                                 Result = rpc:call(Node, Module, Function, Args),
-                                lager:info("~p: got result: ~p", [?MODULE, Result]),
+                                error_logger:format("~p: got result: ~p", [?MODULE, Result]),
 
                                 %% Update item in dets.
                                 NewWorkItems = lists:keyreplace(WorkItemId, 1, WorkItems, {WorkItemId, WorkItem, Result}),
                                 case dets:insert(Reference, {WorkId, NewWorkItems}) of
                                     ok ->
-                                        lager:info("~p: updated item in dets.", [?MODULE]),
+                                        error_logger:format("~p: updated item in dets.", [?MODULE]),
                                         {true, WorkItemsCompleted ++ [LastWorkItem]};
                                     {error, Reason} ->
-                                        lager:info("~p: writing to dets failed: ~p", [?MODULE, Reason]),
+                                        error_logger:format("~p: writing to dets failed: ~p", [?MODULE, Reason]),
                                         {false, WorkItemsCompleted ++ [LastWorkItem]}
                                 end
                             catch
                                 _:Error ->
-                                    lager:info("~p: got exception: ~p", [?MODULE, Error]),
+                                    error_logger:format("~p: got exception: ~p", [?MODULE, Error]),
                                     {false, WorkItemsCompleted ++ [LastWorkItem]}
                             end;
                         _ ->
-                            lager:info("~p: work already performed, advancing to next item.", [?MODULE]),
+                            error_logger:format("~p: work already performed, advancing to next item.", [?MODULE]),
                             {true, WorkItemsCompleted ++ [LastWorkItem]}
                     end
             end
@@ -135,10 +165,10 @@ handle_info(work, #state{reference=Reference}=State) ->
         case ItemCompleted of
             true ->
                 %% We made it through the entire list with a result for everything, remove from dets.
-                lager:info("~p: work ~p completed!", [?MODULE, WorkId]),
+                error_logger:format("~p: work ~p completed!", [?MODULE, WorkId]),
                 ItemsToDelete0 ++ [WorkId];
             false ->
-                lager:info("~p: work ~p NOT YET completed!", [?MODULE, WorkId]),
+                error_logger:format("~p: work ~p NOT YET completed!", [?MODULE, WorkId]),
                 ItemsToDelete0
         end
     end, [], Reference),
@@ -154,11 +184,11 @@ handle_info(work, #state{reference=Reference}=State) ->
     {noreply, State};
 
 handle_info(Info, State) ->
-    lager:info("~p: unhandled info: ~p", [?MODULE, Info]),
+    error_logger:format("~p: unhandled info: ~p", [?MODULE, Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
-    lager:info("~p: terminating.", [?MODULE]),
+    error_logger:format("~p: terminating.", [?MODULE]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -168,4 +198,4 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @private
 schedule_work() ->
-    erlang:send_after(1000, work).
+    timer:send_after(1000, work).
