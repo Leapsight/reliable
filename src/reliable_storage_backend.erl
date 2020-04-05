@@ -172,7 +172,7 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
         end
     end, []),
 
-    error_logger:format("~p: attempting to delete keys: ~p", [?MODULE, ItemsToDelete]),
+    error_logger:format("~p: attempting to delete keys because work complete: ~p", [?MODULE, ItemsToDelete]),
 
     %% Delete items outside of iterator to ensure delete is safe.
     ok = ?BACKEND:delete_all(Reference, ItemsToDelete),
