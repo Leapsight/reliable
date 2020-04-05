@@ -18,6 +18,7 @@
 
 -define(TABLE, reliable_backend).
 -define(FILENAME, "reliable-backend-data").
+-define(BACKEND, reliable_dets_storage_backend).
 
 -record(state, {reference, symbolics}).
 
@@ -63,8 +64,8 @@ init([]) ->
     %% Schedule process to look for work.
     schedule_work(),
 
-    %% Open storage in dets.
-    case dets:open_file(?TABLE, [{file, ?FILENAME}]) of 
+    %% Open storage.
+    case ?BACKEND:init() of
         {ok, Reference} ->
             {ok, #state{symbolics=Symbolics, reference=Reference}};
         {error, Reason} ->
@@ -76,8 +77,8 @@ handle_call({enqueue, Work}, _From, #state{reference=Reference}=State) ->
     %% TODO: Replay once completed.
     error_logger:format("~p: enqueuing work: ~p", [?MODULE, Work]),
 
-    case dets:insert_new(Reference, Work) of 
-        true ->
+    case ?BACKEND:enqueue(Reference, Work) of 
+        ok ->
             {reply, ok, State};
         {error, Reason} ->
             {reply, {error, Reason}, State}
@@ -100,7 +101,7 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
     %% Not sure. I'm assuming not for now since yielding the same item (insert case) 
     %% is not as bad as skipping an item (delete case.)
     %%
-    ItemsToDelete = dets:foldl(fun({WorkId, WorkItems}, ItemsToDelete0) ->
+    ItemsToDelete = ?BACKEND:fold(Reference, fun({WorkId, WorkItems}, ItemsToDelete0) ->
         error_logger:format("~p: found work to be performed: ~p", [?MODULE, WorkId]),
 
         {ItemCompleted, _} = lists:foldl(fun({WorkItemId, WorkItem, WorkItemResult}=LastWorkItem, {LastWorkItemCompleted0, WorkItemsCompleted}) ->
@@ -139,14 +140,14 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
                                 Result = rpc:call(Node, Module, Function, Args),
                                 error_logger:format("~p: got result: ~p", [?MODULE, Result]),
 
-                                %% Update item in dets.
+                                %% Update item.
                                 NewWorkItems = lists:keyreplace(WorkItemId, 1, WorkItems, {WorkItemId, WorkItem, Result}),
-                                case dets:insert(Reference, {WorkId, NewWorkItems}) of
+                                case ?BACKEND:update(Reference, WorkId, NewWorkItems) of
                                     ok ->
-                                        error_logger:format("~p: updated item in dets.", [?MODULE]),
+                                        error_logger:format("~p: updated item.", [?MODULE]),
                                         {true, WorkItemsCompleted ++ [LastWorkItem]};
                                     {error, Reason} ->
-                                        error_logger:format("~p: writing to dets failed: ~p", [?MODULE, Reason]),
+                                        error_logger:format("~p: writing failed: ~p", [?MODULE, Reason]),
                                         {false, WorkItemsCompleted ++ [LastWorkItem]}
                                 end
                             catch
@@ -164,19 +165,17 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
         %% Only remove the work when all of the work items are done.
         case ItemCompleted of
             true ->
-                %% We made it through the entire list with a result for everything, remove from dets.
+                %% We made it through the entire list with a result for everything, remove.
                 error_logger:format("~p: work ~p completed!", [?MODULE, WorkId]),
                 ItemsToDelete0 ++ [WorkId];
             false ->
                 error_logger:format("~p: work ~p NOT YET completed!", [?MODULE, WorkId]),
                 ItemsToDelete0
         end
-    end, [], Reference),
+    end, []),
 
     %% Delete items outside of iterator to ensure delete is safe.
-    lists:foreach(fun(Key) ->
-        dets:delete(Reference, Key)
-    end, ItemsToDelete),
+    ?BACKEND:delete_all(Reference, ItemsToDelete),
 
     %% Reschedule work.
     schedule_work(),
