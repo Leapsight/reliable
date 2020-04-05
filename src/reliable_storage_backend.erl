@@ -16,8 +16,6 @@
          terminate/2,  
          code_change/3]).
 
--define(TABLE, reliable_backend).
--define(FILENAME, "reliable-backend-data").
 -define(BACKEND, reliable_dets_storage_backend).
 
 -record(state, {reference, symbolics}).
@@ -174,8 +172,10 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
         end
     end, []),
 
+    error_logger:format("~p: attempting to delete keys: ~p", [?MODULE, ItemsToDelete]),
+
     %% Delete items outside of iterator to ensure delete is safe.
-    ?BACKEND:delete_all(Reference, ItemsToDelete),
+    ok = ?BACKEND:delete_all(Reference, ItemsToDelete),
 
     %% Reschedule work.
     schedule_work(),
