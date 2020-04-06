@@ -15,6 +15,9 @@ all() ->
 init_per_testcase(Case, _Config) ->
     ct:pal("Beginning test case ~p", [Case]),
 
+    %% Allow keylisting.
+    application:set_env(riakc, allow_listing, true),
+
     %% Start the application.
     application:ensure_all_started(reliable),
 
@@ -31,8 +34,8 @@ end_per_testcase(Case, _Config) ->
 basic_test(_Config) ->
     %% Enqueue a write into Riak.
     Object = riakc_obj:new(<<"groceries">>, <<"mine">>, <<"eggs & bacon">>),
-    Work = {basic, [{1, {node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]}, undefined}]},
-    ok = reliable_storage_backend:enqueue(Work),
+    Work = [{1, {node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]}}],
+    ok = reliable:enqueue(basic, Work),
 
     %% Sleep for 5 seconds for write to happen.
     timer:sleep(5000),
@@ -51,12 +54,12 @@ index_test(_Config) ->
     Index = riakc_set:new(),
     Index1 = riakc_set:add_element(<<"cmeik">>, Index),
 
-    Work = {cmeik, [
-                    {1, {node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]}, undefined},
-                    {2, {node(), riakc_pb_socket, update_type, 
-                        [{symbolic, riakc}, {<<"sets">>, <<"users">>}, <<"users">>, riakc_set:to_op(Index1)]}, undefined}
-                   ]},
-    ok = reliable_storage_backend:enqueue(Work),
+    Work = [
+            {1, {node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]}},
+            {2, {node(), riakc_pb_socket, update_type, 
+                [{symbolic, riakc}, {<<"sets">>, <<"users">>}, <<"users">>, riakc_set:to_op(Index1)]}}
+           ],
+    ok = reliable:enqueue(cmeik, Work),
 
     %% Sleep for 5 seconds for write to happen.
     timer:sleep(5000),

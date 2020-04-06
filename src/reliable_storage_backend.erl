@@ -16,7 +16,7 @@
          terminate/2,  
          code_change/3]).
 
--define(BACKEND, reliable_dets_storage_backend).
+-define(BACKEND, reliable_riak_storage_backend).
 
 -record(state, {reference, symbolics}).
 

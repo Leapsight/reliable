@@ -43,7 +43,8 @@ update(Reference, WorkId, WorkItems) ->
 
 fold(Reference, Function, Acc) ->
     %% Get list of the keys in the bucket.
-    Keys = riakc_pb_socket:list_keys(Reference, ?BUCKET),
+    {ok, Keys} = riakc_pb_socket:list_keys(Reference, ?BUCKET),
+    error_logger:format("~p: got work keys: ~p", [?MODULE, Keys]),
 
     %% Fold the keys.
     FoldFun = fun(Key, Acc1) ->
@@ -52,6 +53,8 @@ fold(Reference, Function, Acc) ->
             {ok, Object} ->
                 BinaryData = riakc_obj:get_value(Object),
                 TermData = binary_to_term(BinaryData),
+                error_logger:format("~p: got key: ~p", [?MODULE, Key]),
+                error_logger:format("~p: got term data: ~p", [?MODULE, TermData]),
                 Function({Key, TermData}, Acc1);
             {error, Reason} ->
                 error_logger:format("~p: can't handle response from pb socket: ~p", [?MODULE, Reason]),
