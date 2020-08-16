@@ -4,16 +4,18 @@
 
 -behaviour(gen_server).
 
+-include_lib("kernel/include/logger.hrl").
+
 %% API
 -export([start_link/0,
          enqueue/1]).
 
 %% gen_server callbacks
--export([init/1, 
-         handle_call/3, 
-         handle_cast/2, 
-         handle_info/2, 
-         terminate/2,  
+-export([init/1,
+         handle_call/3,
+         handle_cast/2,
+         handle_info/2,
+         terminate/2,
          code_change/3]).
 
 -define(BACKEND, reliable_riak_storage_backend).
@@ -27,13 +29,15 @@
 -type work_item() :: {node(), module(), function(), [term()]}.
 
 %% the result of any work performed.
--type work_item_result() :: term(). 
+-type work_item_result() :: term().
 
 %% identifier for the work item.
 -type work_item_id() :: integer().
 
 %% the work.
 -type work() :: {work_id(), [{work_item_id(), work_item(), work_item_result()}]}.
+
+-export_type([work_item/0]).
 
 %% API
 
@@ -48,13 +52,13 @@ enqueue(Work) ->
 %% gen_server callbacks
 
 init([]) ->
-    error_logger:format("~p: initializing.", [?MODULE]),
+    ?LOG_INFO("~p: initializing.", [?MODULE]),
 
     %% Initialize symbolic variable dict.
     Symbolics0 = dict:new(),
 
     {ok, RiakcPid} = riakc_pb_socket:start_link("127.0.0.1", 8087),
-    error_logger:format("~p: got connection to Riak: ~p", [?MODULE, RiakcPid]),
+    ?LOG_INFO("~p: got connection to Riak: ~p", [?MODULE, RiakcPid]),
     pong = riakc_pb_socket:ping(RiakcPid),
 
     Symbolics = dict:store(riakc, RiakcPid, Symbolics0),
@@ -73,9 +77,9 @@ init([]) ->
 handle_call({enqueue, Work}, _From, #state{reference=Reference}=State) ->
     %% TODO: Deduplicate here.
     %% TODO: Replay once completed.
-    error_logger:format("~p: enqueuing work: ~p", [?MODULE, Work]),
+    ?LOG_INFO("~p: enqueuing work: ~p", [?MODULE, Work]),
 
-    case ?BACKEND:enqueue(Reference, Work) of 
+    case ?BACKEND:enqueue(Reference, Work) of
         ok ->
             {reply, ok, State};
         {error, Reason} ->
@@ -83,35 +87,35 @@ handle_call({enqueue, Work}, _From, #state{reference=Reference}=State) ->
     end;
 
 handle_call(Request, _From, State) ->
-    error_logger:format("~p: unhandled call: ~p", [?MODULE, Request]),
+    ?LOG_INFO("~p: unhandled call: ~p", [?MODULE, Request]),
     {reply, {error, not_implemented}, State}.
 
 handle_cast(Msg, State) ->
-    error_logger:format("~p: unhandled cast: ~p", [?MODULE, Msg]),
+    ?LOG_INFO("~p: unhandled cast: ~p", [?MODULE, Msg]),
     {noreply, State}.
 
 handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
-    % error_logger:format("~p: looking for work.", [?MODULE]),
+    % ?LOG_INFO("~p: looking for work.", [?MODULE]),
 
     %% Iterate through work that needs to be done.
     %%
     %% Probably inserting when holding the iterator is a problem too?
-    %% Not sure. I'm assuming not for now since yielding the same item (insert case) 
+    %% Not sure. I'm assuming not for now since yielding the same item (insert case)
     %% is not as bad as skipping an item (delete case.)
     %%
     ItemsToDelete = ?BACKEND:fold(Reference, fun({WorkId, WorkItems}, ItemsToDelete0) ->
-        error_logger:format("~p: found work to be performed: ~p", [?MODULE, WorkId]),
+        ?LOG_INFO("~p: found work to be performed: ~p", [?MODULE, WorkId]),
 
         {ItemCompleted, _} = lists:foldl(fun({WorkItemId, WorkItem, WorkItemResult}=LastWorkItem, {LastWorkItemCompleted0, WorkItemsCompleted}) ->
             %% Don't iterate if the last item wasn't completed.
-            case LastWorkItemCompleted0 of 
+            case LastWorkItemCompleted0 of
                 false ->
-                    error_logger:format("~p: not attempting next item, since last failed.", [?MODULE]),
+                    ?LOG_INFO("~p: not attempting next item, since last failed.", [?MODULE]),
                     {LastWorkItemCompleted0, WorkItemsCompleted ++ [LastWorkItem]};
                 true ->
-                    error_logger:format("~p: found work item to be performed: ~p", [?MODULE, WorkItem]),
+                    ?LOG_INFO("~p: found work item to be performed: ~p", [?MODULE, WorkItem]),
 
-                    case WorkItemResult of 
+                    case WorkItemResult of
                         undefined ->
                             %% Destructure work to be performed.
                             {Node, Module, Function, Args0} = WorkItem,
@@ -120,9 +124,9 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
                             try
                                 %% Replace symbolic terms in the work item.
                                 Args = lists:map(fun(Arg) ->
-                                    case Arg of 
+                                    case Arg of
                                         {symbolic, Symbolic} ->
-                                            case dict:find(Symbolic, Symbolics) of 
+                                            case dict:find(Symbolic, Symbolics) of
                                                 error ->
                                                     Arg;
                                                 {ok, Value} ->
@@ -133,28 +137,28 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
                                     end
                                 end, Args0),
 
-                                error_logger:format("~p: trying to perform work: rpc to ~p", [?MODULE, Node]),
-                                error_logger:format("~p: trying to perform work: => ~p:~p with args ~p", [?MODULE, Module, Function, Args]),
+                                ?LOG_INFO("~p: trying to perform work: rpc to ~p", [?MODULE, Node]),
+                                ?LOG_INFO("~p: trying to perform work: => ~p:~p with args ~p", [?MODULE, Module, Function, Args]),
                                 Result = rpc:call(Node, Module, Function, Args),
-                                error_logger:format("~p: got result: ~p", [?MODULE, Result]),
+                                ?LOG_INFO("~p: got result: ~p", [?MODULE, Result]),
 
                                 %% Update item.
                                 NewWorkItems = lists:keyreplace(WorkItemId, 1, WorkItems, {WorkItemId, WorkItem, Result}),
                                 case ?BACKEND:update(Reference, WorkId, NewWorkItems) of
                                     ok ->
-                                        error_logger:format("~p: updated item.", [?MODULE]),
+                                        ?LOG_INFO("~p: updated item.", [?MODULE]),
                                         {true, WorkItemsCompleted ++ [LastWorkItem]};
                                     {error, Reason} ->
-                                        error_logger:format("~p: writing failed: ~p", [?MODULE, Reason]),
+                                        ?LOG_INFO("~p: writing failed: ~p", [?MODULE, Reason]),
                                         {false, WorkItemsCompleted ++ [LastWorkItem]}
                                 end
                             catch
                                 _:Error ->
-                                    error_logger:format("~p: got exception: ~p", [?MODULE, Error]),
+                                    ?LOG_ERROR("~p: got exception: ~p", [?MODULE, Error]),
                                     {false, WorkItemsCompleted ++ [LastWorkItem]}
                             end;
                         _ ->
-                            error_logger:format("~p: work already performed, advancing to next item.", [?MODULE]),
+                            ?LOG_INFO("~p: work already performed, advancing to next item.", [?MODULE]),
                             {true, WorkItemsCompleted ++ [LastWorkItem]}
                     end
             end
@@ -164,15 +168,15 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
         case ItemCompleted of
             true ->
                 %% We made it through the entire list with a result for everything, remove.
-                error_logger:format("~p: work ~p completed!", [?MODULE, WorkId]),
+                ?LOG_INFO("~p: work ~p completed!", [?MODULE, WorkId]),
                 ItemsToDelete0 ++ [WorkId];
             false ->
-                error_logger:format("~p: work ~p NOT YET completed!", [?MODULE, WorkId]),
+                ?LOG_INFO("~p: work ~p NOT YET completed!", [?MODULE, WorkId]),
                 ItemsToDelete0
         end
     end, []),
 
-    error_logger:format("~p: attempting to delete keys because work complete: ~p", [?MODULE, ItemsToDelete]),
+    ?LOG_INFO("~p: attempting to delete keys because work complete: ~p", [?MODULE, ItemsToDelete]),
 
     %% Delete items outside of iterator to ensure delete is safe.
     ok = ?BACKEND:delete_all(Reference, ItemsToDelete),
@@ -183,11 +187,11 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
     {noreply, State};
 
 handle_info(Info, State) ->
-    error_logger:format("~p: unhandled info: ~p", [?MODULE, Info]),
+    ?LOG_INFO("~p: unhandled info: ~p", [?MODULE, Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
-    error_logger:format("~p: terminating.", [?MODULE]),
+    ?LOG_INFO("~p: terminating.", [?MODULE]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
