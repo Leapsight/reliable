@@ -87,11 +87,11 @@ handle_call({enqueue, Work}, _From, #state{reference=Reference}=State) ->
     end;
 
 handle_call(Request, _From, State) ->
-    ?LOG_INFO("~p: unhandled call: ~p", [?MODULE, Request]),
+    ?LOG_WARNING("~p: unhandled call: ~p", [?MODULE, Request]),
     {reply, {error, not_implemented}, State}.
 
 handle_cast(Msg, State) ->
-    ?LOG_INFO("~p: unhandled cast: ~p", [?MODULE, Msg]),
+    ?LOG_WARNING("~p: unhandled cast: ~p", [?MODULE, Msg]),
     {noreply, State}.
 
 handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
@@ -137,19 +137,19 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
                                     end
                                 end, Args0),
 
-                                ?LOG_INFO("~p: trying to perform work: rpc to ~p", [?MODULE, Node]),
-                                ?LOG_INFO("~p: trying to perform work: => ~p:~p with args ~p", [?MODULE, Module, Function, Args]),
+                                ?LOG_DEBUG("~p: trying to perform work: rpc to ~p", [?MODULE, Node]),
+                                ?LOG_DEBUG("~p: trying to perform work: => ~p:~p with args ~p", [?MODULE, Module, Function, Args]),
                                 Result = rpc:call(Node, Module, Function, Args),
-                                ?LOG_INFO("~p: got result: ~p", [?MODULE, Result]),
+                                ?LOG_DEBUG("~p: got result: ~p", [?MODULE, Result]),
 
                                 %% Update item.
                                 NewWorkItems = lists:keyreplace(WorkItemId, 1, WorkItems, {WorkItemId, WorkItem, Result}),
                                 case ?BACKEND:update(Reference, WorkId, NewWorkItems) of
                                     ok ->
-                                        ?LOG_INFO("~p: updated item.", [?MODULE]),
+                                        ?LOG_DEBUG("~p: updated item.", [?MODULE]),
                                         {true, WorkItemsCompleted ++ [LastWorkItem]};
                                     {error, Reason} ->
-                                        ?LOG_INFO("~p: writing failed: ~p", [?MODULE, Reason]),
+                                        ?LOG_DEBUG("~p: writing failed: ~p", [?MODULE, Reason]),
                                         {false, WorkItemsCompleted ++ [LastWorkItem]}
                                 end
                             catch
@@ -158,7 +158,7 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
                                     {false, WorkItemsCompleted ++ [LastWorkItem]}
                             end;
                         _ ->
-                            ?LOG_INFO("~p: work already performed, advancing to next item.", [?MODULE]),
+                            ?LOG_DEBUG("~p: work already performed, advancing to next item.", [?MODULE]),
                             {true, WorkItemsCompleted ++ [LastWorkItem]}
                     end
             end
@@ -168,15 +168,15 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
         case ItemCompleted of
             true ->
                 %% We made it through the entire list with a result for everything, remove.
-                ?LOG_INFO("~p: work ~p completed!", [?MODULE, WorkId]),
+                ?LOG_DEBUG("~p: work ~p completed!", [?MODULE, WorkId]),
                 ItemsToDelete0 ++ [WorkId];
             false ->
-                ?LOG_INFO("~p: work ~p NOT YET completed!", [?MODULE, WorkId]),
+                ?LOG_DEBUG("~p: work ~p NOT YET completed!", [?MODULE, WorkId]),
                 ItemsToDelete0
         end
     end, []),
 
-    ?LOG_INFO("~p: attempting to delete keys because work complete: ~p", [?MODULE, ItemsToDelete]),
+    ?LOG_DEBUG("~p: attempting to delete keys because work complete: ~p", [?MODULE, ItemsToDelete]),
 
     %% Delete items outside of iterator to ensure delete is safe.
     ok = ?BACKEND:delete_all(Reference, ItemsToDelete),
@@ -187,7 +187,7 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
     {noreply, State};
 
 handle_info(Info, State) ->
-    ?LOG_INFO("~p: unhandled info: ~p", [?MODULE, Info]),
+    ?LOG_WARNING("~p: unhandled info: ~p", [?MODULE, Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->

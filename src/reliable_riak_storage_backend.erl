@@ -37,18 +37,23 @@ update(Reference, WorkId, WorkItems) ->
                 {ok, _O2} ->
                     ok;
                 {error, Reason} ->
-                    ?LOG_INFO("~p: failed to update object: ~p", [?MODULE, Reason]),
+                    ?LOG_ERROR(
+                        "~p: failed to update object: ~p", [?MODULE, Reason]
+                    ),
                     {error, Reason}
             end;
         {error, Reason} ->
-            ?LOG_ERROR("~p: failed to read object before update: ~p", [?MODULE, Reason]),
+            ?LOG_ERROR(
+                "~p: failed to read object before update: ~p",
+                [?MODULE, Reason]
+            ),
             {error, Reason}
     end.
 
 fold(Reference, Function, Acc) ->
     %% Get list of the keys in the bucket.
     {ok, Keys} = riakc_pb_socket:list_keys(Reference, bucket()),
-    ?LOG_INFO("~p: got work keys: ~p", [?MODULE, Keys]),
+    ?LOG_DEBUG("~p: got work keys: ~p", [?MODULE, Keys]),
 
     %% Fold the keys.
     FoldFun = fun(Key, Acc1) ->
@@ -57,11 +62,14 @@ fold(Reference, Function, Acc) ->
             {ok, Object} ->
                 BinaryData = riakc_obj:get_value(Object),
                 TermData = binary_to_term(BinaryData),
-                ?LOG_INFO("~p: got key: ~p", [?MODULE, Key]),
-                ?LOG_INFO("~p: got term data: ~p", [?MODULE, TermData]),
+                ?LOG_DEBUG("~p: got key: ~p", [?MODULE, Key]),
+                ?LOG_DEBUG("~p: got term data: ~p", [?MODULE, TermData]),
                 Function({Key, TermData}, Acc1);
             {error, Reason} ->
-                ?LOG_ERROR("~p: can't handle response from pb socket: ~p", [?MODULE, Reason]),
+                ?LOG_ERROR(
+                    "~p: can't handle response from pb socket: ~p",
+                    [?MODULE, Reason]
+                ),
                 Acc1
         end
     end,
