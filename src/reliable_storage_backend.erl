@@ -8,7 +8,8 @@
 
 %% API
 -export([start_link/0,
-         enqueue/1]).
+         enqueue/1,
+         enqueue/2]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -20,7 +21,10 @@
 
 -define(BACKEND, reliable_riak_storage_backend).
 
--record(state, {reference, symbolics}).
+-record(state, {
+    reference   ::  reference() | pid(),
+    symbolics   ::  dict:dict()
+}).
 
 %% should be some sort of unique term identifier.
 -type work_id() :: term().
@@ -48,6 +52,11 @@ start_link() ->
 
 enqueue(Work) ->
     gen_server:call(?MODULE, {enqueue, Work}).
+
+-spec enqueue(work(), binary()) -> ok | {error, term()}.
+
+enqueue(Work, PartitionKey) ->
+    gen_server:call(?MODULE, {enqueue, Work, PartitionKey}).
 
 %% gen_server callbacks
 
@@ -80,6 +89,18 @@ handle_call({enqueue, Work}, _From, #state{reference=Reference}=State) ->
     ?LOG_INFO("~p: enqueuing work: ~p", [?MODULE, Work]),
 
     case ?BACKEND:enqueue(Reference, Work) of
+        ok ->
+            {reply, ok, State};
+        {error, Reason} ->
+            {reply, {error, Reason}, State}
+    end;
+
+handle_call({enqueue, Work, PartitionKey}, _From, #state{reference=Reference}=State) ->
+    %% TODO: Deduplicate here.
+    %% TODO: Replay once completed.
+    ?LOG_INFO("~p: enqueuing work: ~p, partition_key: ~p", [?MODULE, Work, PartitionKey]),
+
+    case ?BACKEND:enqueue(Reference, PartitionKey, Work) of
         ok ->
             {reply, ok, State};
         {error, Reason} ->
