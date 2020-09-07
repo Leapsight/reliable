@@ -8,7 +8,6 @@
 
 %% API
 -export([start_link/0,
-         enqueue/1,
          enqueue/2]).
 
 %% gen_server callbacks
@@ -41,24 +40,39 @@
 %% the work.
 -type work() :: {work_id(), [{work_item_id(), work_item(), work_item_result()}]}.
 
+
+-export_type([work_id/0]).
+-export_type([work_item_id/0]).
+-export_type([work_item_result/0]).
 -export_type([work_item/0]).
 
+
+
+%% =============================================================================
 %% API
+%% =============================================================================
+
+
 
 start_link() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
--spec enqueue(work()) -> ok | {error, term()}.
 
-enqueue(Work) ->
-    gen_server:call(?MODULE, {enqueue, Work}).
+-spec enqueue(work(), binary() | undefined) -> ok | {error, term()}.
 
--spec enqueue(work(), binary()) -> ok | {error, term()}.
+enqueue(Work, undefined) ->
+    gen_server:call(?MODULE, {enqueue, Work});
 
 enqueue(Work, PartitionKey) ->
     gen_server:call(?MODULE, {enqueue, Work, PartitionKey}).
 
-%% gen_server callbacks
+
+
+%% =============================================================================
+%% GEN_SERVER CALLBACKS
+%% =============================================================================
+
+
 
 init([]) ->
     ?LOG_INFO("~p: initializing.", [?MODULE]),
@@ -127,7 +141,7 @@ handle_info(work, #state{symbolics=Symbolics, reference=Reference}=State) ->
     ItemsToDelete = ?BACKEND:fold(Reference, fun({WorkId, WorkItems}, ItemsToDelete0) ->
         ?LOG_INFO("~p: found work to be performed: ~p", [?MODULE, WorkId]),
 
-        {ItemCompleted, _} = lists:foldl(fun({WorkItemId, WorkItem, WorkItemResult}=LastWorkItem, {LastWorkItemCompleted0, WorkItemsCompleted}) ->
+        {ItemCompleted, _} = lists:foldl(fun({WorkItemId, WorkItem, WorkItemResult} = LastWorkItem, {LastWorkItemCompleted0, WorkItemsCompleted}) ->
             %% Don't iterate if the last item wasn't completed.
             case LastWorkItemCompleted0 of
                 false ->
