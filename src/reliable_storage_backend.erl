@@ -77,6 +77,8 @@ enqueue(Work, PartitionKey) ->
 init([]) ->
     ?LOG_INFO("~p: initializing.", [?MODULE]),
 
+    %% _ = erlang:process_flag(trap_exit, true),
+
     %% Initialize symbolic variable dict.
     Symbolics0 = dict:new(),
 

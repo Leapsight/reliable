@@ -1,1 +1,12 @@
-[].
+[{<<"hamcrest">>,
+  {git,"https://github.com/basho/hamcrest-erlang.git",
+       {ref,"ad3dbab419762fc2d5821abb88b989da006b85c6"}},
+  2},
+ {<<"riak_pb">>,
+  {git,"https://github.com/basho/riak_pb",
+       {ref,"08771aba2ce4935b715d32d1b92555efdc3da994"}},
+  1},
+ {<<"riakc">>,
+  {git,"git://github.com/basho/riak-erlang-client.git",
+       {ref,"e4efcb7efd6ded616c5f1d7bae5ca36f9dee6bc2"}},
+  0}].
