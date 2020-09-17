@@ -10,7 +10,9 @@
          fold/3]).
 
 init() ->
-    case riakc_pb_socket:start_link("127.0.0.1", 8087) of
+    Host = application:get_env(reliable, riak_host, "127.0.0.1"),
+    Port = application:get_env(reliable, riak_port, 80087),
+    case riakc_pb_socket:start_link(Host, Port) of
         {ok, Pid} ->
             {ok, Pid};
         {error, Reason} ->

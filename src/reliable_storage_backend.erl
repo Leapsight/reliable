@@ -82,7 +82,9 @@ init([]) ->
     %% Initialize symbolic variable dict.
     Symbolics0 = dict:new(),
 
-    {ok, RiakcPid} = riakc_pb_socket:start_link("127.0.0.1", 8087),
+    Host = application:get_env(reliable, riak_host, "127.0.0.1"),
+    Port = application:get_env(reliable, riak_port, 80087),
+    {ok, RiakcPid} = riakc_pb_socket:start_link(Host, Port),
     ?LOG_INFO("~p: got connection to Riak: ~p", [?MODULE, RiakcPid]),
     pong = riakc_pb_socket:ping(RiakcPid),
 
