@@ -11,7 +11,7 @@
 
 init() ->
     Host = application:get_env(reliable, riak_host, "127.0.0.1"),
-    Port = application:get_env(reliable, riak_port, 80087),
+    Port = application:get_env(reliable, riak_port, 8087),
     case riakc_pb_socket:start_link(Host, Port) of
         {ok, Pid} ->
             {ok, Pid};
