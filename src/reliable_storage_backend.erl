@@ -83,7 +83,7 @@ init([]) ->
     Symbolics0 = dict:new(),
 
     Host = application:get_env(reliable, riak_host, "127.0.0.1"),
-    Port = application:get_env(reliable, riak_port, 80087),
+    Port = application:get_env(reliable, riak_port, 8087),
     {ok, RiakcPid} = riakc_pb_socket:start_link(Host, Port),
     ?LOG_INFO("~p: got connection to Riak: ~p", [?MODULE, RiakcPid]),
     pong = riakc_pb_socket:ping(RiakcPid),
