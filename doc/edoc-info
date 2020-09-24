@@ -1,0 +1,5 @@
+%% encoding: UTF-8
+{application,reliable}.
+{modules,[reliable,reliable_app,reliable_dets_storage_backend,
+          reliable_digraph,reliable_riak_storage_backend,
+          reliable_storage_backend,reliable_sup]}.
