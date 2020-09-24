@@ -5,7 +5,11 @@
   {mod, {reliable_app, []}},
   {applications,
    [kernel,
-    stdlib
+    stdlib,
+    sasl,
+    crypto,
+    base62,
+    ksuid
    ]},
   {env,[]},
   {modules, []},
