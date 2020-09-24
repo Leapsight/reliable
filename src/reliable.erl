@@ -282,7 +282,7 @@ workflow(Fun) ->
     | {error, Reason :: any()}
     | no_return().
 
-workflow(Fun, Opts) ->
+workflow(Fun, Opts) when is_function(Fun, 0) ->
     {ok, WorkId} = init_workflow(Opts),
     try
         %% Fun should use this module functions which are workflow aware.
@@ -367,7 +367,7 @@ add_workflow_precedence(A, B) ->
 
 %% -----------------------------------------------------------------------------
 %% @doc Returns a workflow item that was previously added to the workflow stack
-%% with the {@link add_workflow_item/2} function.
+%% with the {@link add_workflow_items/2} function.
 %% Fails with a `badkey' exception if there is no workflow item identified by
 %% `Id'.
 %% Fails with a `no_workflow' exception if the calling process doe not
