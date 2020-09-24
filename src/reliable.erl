@@ -35,7 +35,7 @@
 
 
 -define(WORKFLOW_ID, reliable_workflow_id).
--define(WORKFLOW_LEVEL, reliable_workflow_count).
+-define(WORKFLOW_LEVEL, reliable_workflow_level).
 -define(WORKFLOW_GRAPH, reliable_digraph).
 -define(RELIABLE_PARTITION_KEY, reliable_partition_key).
 
