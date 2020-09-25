@@ -1,18 +1,18 @@
-{application, reliable,
- [{description, "An OTP application"},
-  {vsn, "0.1.0"},
-  {registered, []},
-  {mod, {reliable_app, []}},
-  {applications,
-   [kernel,
-    stdlib,
-    sasl,
-    crypto,
-    base62,
-    ksuid
-   ]},
-  {env,[]},
-  {modules, []},
-  {licenses, ["Apache 2.0"]},
-  {links, []}
+{application, reliable, [
+    {description, "An OTP application"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {reliable_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        sasl,
+        crypto,
+        base62,
+        ksuid
+    ]},
+    {env,[]},
+    {modules, []},
+    {licenses, ["Apache 2.0"]},
+    {links, []}
  ]}.
