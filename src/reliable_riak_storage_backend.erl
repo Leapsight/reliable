@@ -8,6 +8,8 @@
 
 -export([init/0,
          enqueue/3,
+         get/2,
+         delete/3,
          delete_all/3,
          update/4,
          fold/4]).
@@ -49,6 +51,30 @@ enqueue(Reference, Bucket, {WorkId, WorkItems}) ->
     riakc_pb_socket:put(Reference, Object).
 
 
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+get(Reference, {work_ref, Bucket, WorkId}) ->
+    case riakc_pb_socket:get(Reference, Bucket, WorkId, []) of
+        {ok, Object} ->
+            BinaryData = riakc_obj:get_value(Object),
+            TermData = binary_to_term(BinaryData),
+            {ok, TermData};
+        {error, notfound} ->
+            {error, not_found};
+        {error, _} = Error ->
+            Error
+    end.
+
+
+
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
 delete(Reference, Bucket, WorkId) ->
     riakc_pb_socket:delete(Reference, Bucket, WorkId).
 

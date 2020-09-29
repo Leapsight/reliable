@@ -21,6 +21,12 @@
     NewAcc :: any().
 
 
+-callback get(
+    Ref :: pid(),
+    WorkId :: reliable_worker:work_ref()) ->
+        {ok, term()} | {error, not_found | any()}.
+
+
 -callback delete(
     Ref :: pid(),
     Bucket :: binary(),

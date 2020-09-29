@@ -73,21 +73,21 @@
 -export_type([workflow_item_id/0]).
 -export_type([workflow_opts/0]).
 
--export([enqueue/2]).
--export([enqueue/3]).
 -export([abort/1]).
 -export([add_workflow_items/1]).
 -export([add_workflow_precedence/2]).
+-export([enqueue/2]).
+-export([enqueue/3]).
+-export([ensure_in_workflow/0]).
+-export([find_workflow_item/1]).
+-export([get_workflow_item/1]).
+-export([status/1]).
 -export([is_in_workflow/0]).
 -export([is_nested_workflow/0]).
--export([ensure_in_workflow/0]).
 -export([workflow/1]).
 -export([workflow/2]).
 -export([workflow_id/0]).
 -export([workflow_nesting_level/0]).
--export([get_workflow_item/1]).
--export([find_workflow_item/1]).
-
 
 
 %% =============================================================================
@@ -124,6 +124,16 @@ enqueue(WorkId, WorkItems0, Opts) when is_binary(WorkId) ->
     PartitionKey = maps:get(partition_key, Opts, undefined),
     reliable_worker:enqueue({WorkId, WorkItems}, PartitionKey).
 
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec status(WorkRef :: reliable_worker:work_ref()) ->
+    not_found | {in_progress, Info :: map()} | {failed, Info :: map()}.
+
+status(WorkerRef) ->
+    reliable_worker:status(WorkerRef).
 
 
 %% -----------------------------------------------------------------------------

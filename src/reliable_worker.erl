@@ -7,7 +7,8 @@
 
 %% API
 -export([start_link/2,
-         enqueue/2]).
+         enqueue/2,
+         status/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -67,6 +68,19 @@
 start_link(Name, Bucket) ->
     gen_server:start({local, Name}, ?MODULE, [Bucket], []).
 
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec status(WorkerRef :: work_ref()) ->
+    {in_progress, Info :: map()}
+    | {failed, Info :: map()}
+    | {error, not_found | any()}.
+
+status({work_ref, Instance, WorkId}) ->
+    Instance = binary_to_atom(Instance, utf8),
+    gen_server:call(Instance, {status, WorkId}).
 
 %% -----------------------------------------------------------------------------
 %% @doc
@@ -133,6 +147,24 @@ handle_call(
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;
+
+handle_call({status, WorkId}, _From, State) ->
+    BackendMod = State#state.backend,
+    Ref = State#state.reference,
+    Bucket = State#state.bucket,
+
+    Result = case BackendMod:get(Ref, Bucket, WorkId) of
+        {ok, WorkItems} ->
+            Info = #{
+                size => length(WorkItems),
+                remaining => lists:sum([1 || {_, _, undefined} <- WorkItems])
+            },
+            {in_progress, Info};
+        {error, _} = Error ->
+            Error
+    end,
+
+    {reply, Result, State};
 
 handle_call(Request, _From, State) ->
     ?LOG_WARNING("unhandled call: ~p", [Request]),
