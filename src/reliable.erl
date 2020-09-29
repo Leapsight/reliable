@@ -40,10 +40,10 @@
 -define(RELIABLE_PARTITION_KEY, reliable_partition_key).
 
 
--type work_id()             ::  reliable_storage_backend:work_id().
+-type work_id()             ::  reliable_worker:work_id().
 -type work_item()           ::  [{
-                                    reliable_storage_backend:work_item_id(),
-                                    reliable_storage_backend:work_item()
+                                    reliable_worker:work_item_id(),
+                                    reliable_worker:work_item()
                                 }].
 -type opts()                ::  #{
                                     partition_key => binary()
@@ -53,9 +53,9 @@
                                     partition_key => binary(),
                                     on_terminate => fun((Reason :: any()) -> any())
                                 }.
--type scheduled_item()      ::  reliable_storage_backend:work_item()
+-type scheduled_item()      ::  reliable_worker:work_item()
                                 | fun(
-                                    () -> reliable_storage_backend:work_item()
+                                    () -> reliable_worker:work_item()
                                 ).
 
 -type workflow_item_id()    ::  term().
@@ -114,13 +114,13 @@ enqueue(WorkId, WorkItems) ->
     ok.
 
 enqueue(WorkId, WorkItems0, Opts) ->
-    %% Add result field expected by reliable_storage_backend:work_item().
+    %% Add result field expected by reliable_worker:work_item().
     WorkItems = lists:map(
         fun({Id, MFA}) -> {Id, MFA, undefined} end,
         WorkItems0
     ),
     PartitionKey = maps:get(partition_key, Opts, undefined),
-    reliable_storage_backend:enqueue({WorkId, WorkItems}, PartitionKey).
+    reliable_worker:enqueue({WorkId, WorkItems}, PartitionKey).
 
 
 

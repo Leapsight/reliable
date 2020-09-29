@@ -7,12 +7,6 @@
 
 -define(SERVER, ?MODULE).
 
--define(CHILD(I, Type, Timeout),
-        {I, {I, start_link, []}, permanent, Timeout, Type, [I]}).
--define(CHILD(I, Type), ?CHILD(I, Type, 5000)).
-
-
-
 
 %% =============================================================================
 %% API
@@ -26,16 +20,40 @@ start_link() ->
 
 
 %% =============================================================================
-%% SUPERVISOT CALLBACKS
+%% SUPERVISOR CALLBACKS
 %% =============================================================================
 
 
 
 init([]) ->
-    SupFlags = #{strategy => one_for_all,
-                 intensity => 0,
-                 period => 1},
 
-    ChildSpecs = [?CHILD(reliable_storage_backend, worker)],
+    SupFlags = #{
+        strategy => one_for_one,
+        intensity => 0,
+        period => 1
+    },
+
+    %% We spawn a child per bucket. Each server is the single writer
+    %% to that bucket, the bucket acting as a queue.
+
+    ChildSpecs = [
+        begin
+            Name = binary_to_atom(Bucket, utf8),
+            #{
+                id => Name,
+                start => {
+                    reliable_worker,
+                    start_link,
+                    [Name, Bucket]
+                },
+                restart => permanent,
+                shutdown => infinity,
+                type => worker,
+                modules => [reliable_worker]
+            }
+        end || Bucket <- reliable_config:instances()
+    ],
 
     {ok, {SupFlags, ChildSpecs}}.
+
+

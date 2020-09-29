@@ -1,17 +1,33 @@
 -module(reliable_riak_storage_backend).
--author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
+-behaviour(reliable_storage_backend).
+
 -include_lib("kernel/include/logger.hrl").
+-include_lib("riakc/include/riakc.hrl").
+
+-author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
 
 -export([init/0,
-         enqueue/2,
          enqueue/3,
-         delete_all/2,
-         update/3,
-         fold/3]).
+         delete_all/3,
+         update/4,
+         fold/4]).
 
+
+
+%% =============================================================================
+%% API
+%% =============================================================================
+
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
 init() ->
     Host = application:get_env(reliable, riak_host, "127.0.0.1"),
     Port = application:get_env(reliable, riak_port, 8087),
+
     case riakc_pb_socket:start_link(Host, Port) of
         {ok, Pid} ->
             {ok, Pid};
@@ -19,29 +35,44 @@ init() ->
             {error, Reason}
     end.
 
-enqueue(Reference, {WorkId, WorkItems}) ->
-    Object = riakc_obj:new(bucket(), term_to_binary(WorkId), term_to_binary(WorkItems)),
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+enqueue(Reference, Bucket, {WorkId, WorkItems}) ->
+    Object = riakc_obj:new(
+        Bucket,
+        term_to_binary(WorkId),
+        term_to_binary(WorkItems)
+    ),
     riakc_pb_socket:put(Reference, Object).
 
-enqueue(Reference, PartitionKey, {WorkId, WorkItems}) ->
-    Object = riakc_obj:new(bucket(PartitionKey), term_to_binary(WorkId), term_to_binary(WorkItems)),
-    riakc_pb_socket:put(Reference, Object).
 
-delete_all(Reference, WorkIds) ->
-    lists:foreach(fun(Key) -> riakc_pb_socket:delete(Reference, bucket(), Key) end, WorkIds),
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+delete_all(Reference, Bucket, WorkIds) ->
+    _ = lists:foreach(
+        fun(Key) -> riakc_pb_socket:delete(Reference, Bucket, Key) end, WorkIds
+    ),
     ok.
 
-update(Reference, WorkId, WorkItems) ->
-    case riakc_pb_socket:get(Reference, bucket(), WorkId) of
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+update(Reference, Bucket, WorkId, WorkItems) ->
+    case riakc_pb_socket:get(Reference, Bucket, WorkId) of
         {ok, O} ->
             O1 = riakc_obj:update_value(O, WorkItems),
             case riakc_pb_socket:put(Reference, O1, [return_body]) of
                 {ok, _O2} ->
                     ok;
                 {error, Reason} ->
-                    ?LOG_ERROR(
-                        "~p: failed to update object: ~p", [?MODULE, Reason]
-                    ),
+                    ?LOG_ERROR("failed to update object: ~p", [Reason]),
                     {error, Reason}
             end;
         {error, Reason} ->
@@ -52,47 +83,43 @@ update(Reference, WorkId, WorkItems) ->
             {error, Reason}
     end.
 
-fold(Reference, Function, Acc) ->
-    %% Get list of the keys in the bucket.
-    {ok, Keys} = riakc_pb_socket:list_keys(Reference, bucket()),
-    ?LOG_DEBUG("~p: got work keys: ~p", [?MODULE, Keys]),
 
-    %% Fold the keys.
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+fold(Reference, Bucket, Function, Acc) ->
+    %% Get list of the keys in the bucket.
+    %% We use the $bucket secondary index so that we can do pagination with
+    %% sorting.
+    {ok, Result} = riakc_pb_socket:get_index_eq(
+        Reference,
+        Bucket,
+        <<"$bucket">>,
+        <<>>,
+        %% TODO At the moment we are not paginating, just sorting
+        [{pagination_sort, true}]
+    ),
+
+    #index_results_v1{keys = Keys, continuation = _Cont} = Result,
+
+    ?LOG_DEBUG("Got work keys: ~p", [Keys]),
+
     FoldFun = fun(Key, Acc1) ->
-        %% Get the keys value.
-        case riakc_pb_socket:get(Reference, bucket(), Key) of
+        case riakc_pb_socket:get(Reference, Bucket, Key) of
             {ok, Object} ->
                 BinaryData = riakc_obj:get_value(Object),
                 TermData = binary_to_term(BinaryData),
-                ?LOG_DEBUG("~p: got key: ~p", [?MODULE, Key]),
-                ?LOG_DEBUG("~p: got term data: ~p", [?MODULE, TermData]),
+                ?LOG_DEBUG("got key: ~p", [Key]),
+                ?LOG_DEBUG("got term data: ~p", [TermData]),
                 Function({Key, TermData}, Acc1);
             {error, Reason} ->
                 ?LOG_ERROR(
-                    "~p: can't handle response from pb socket: ~p",
-                    [?MODULE, Reason]
+                    "Can't handle response from pb socket; reason=~p",
+                    [Reason]
                 ),
                 Acc1
         end
     end,
     lists:foldl(FoldFun, Acc, Keys).
 
-%% @private
-bucket(WorkId) ->
-    AllInstances = application:get_env(reliable, instances, ["default_instance"]),
-    HashedWorkId = hash(WorkId),
-    InstanceId = HashedWorkId rem length(AllInstances) + 1,
-    InstanceName = lists:nth(InstanceId, AllInstances),
-    BucketNameList = "work" ++ "_" ++ InstanceName,
-    BucketName = list_to_binary(BucketNameList),
-    BucketName.
-
-bucket() ->
-    InstanceName = application:get_env(reliable, instance_name, "default_instance"),
-    BucketNameList = "work" ++ "_" ++ InstanceName,
-    BucketName = list_to_binary(BucketNameList),
-    BucketName.
-
-%% @private
-hash(Key) ->
-    erlang:phash2(Key).
