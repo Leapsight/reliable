@@ -82,6 +82,7 @@ status({work_ref, Instance, WorkId}) ->
     Instance = binary_to_atom(Instance, utf8),
     gen_server:call(Instance, {status, WorkId}).
 
+
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
@@ -257,10 +258,10 @@ process_work(State) ->
                         end
                     end, Args0),
 
-                    ?LOG_DEBUG("Trying to perform work: rpc to ~p", [Node]),
                     ?LOG_DEBUG(
-                        "Trying to perform work: => ~p:~p with args ~p",
-                        [Module, Function, Args]
+                        "Trying to perform work; node=~p, module=~p, "
+                        "function=~p, args=~p",
+                        [Node, Module, Function, Args]
                     ),
 
                     Result = rpc:call(Node, Module, Function, Args),
@@ -268,8 +269,14 @@ process_work(State) ->
                     ?LOG_DEBUG("Got result: ~p", [Result]),
 
                     %% Update item.
-                    NewItems = lists:keyreplace(ItemId, 1, Items, {ItemId, Item, Result}),
-                    case BackendMod:update(Reference, Bucket, WorkId, NewItems) of
+                    NewItems = lists:keyreplace(
+                        ItemId, 1, Items, {ItemId, Item, Result}),
+
+                    Result = BackendMod:update(
+                        Reference, Bucket, WorkId, NewItems
+                    ),
+
+                    case Result of
                         ok ->
                             ?LOG_DEBUG("Updated item."),
                             {true, ItemsCompleted ++ [LastItem]};
