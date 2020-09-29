@@ -27,7 +27,7 @@
 }).
 
 %% should be some sort of unique term identifier.
--type work_id() :: term().
+-type work_id() :: binary().
 
 %% MFA, and a node to actually execute the RPC at.
 -type work_item() :: {node(), module(), function(), [term()]}.

@@ -56,7 +56,7 @@ basic_test(_Config) ->
     %% Enqueue a write into Riak.
     Object = riakc_obj:new(<<"groceries">>, <<"mine">>, <<"eggs & bacon">>),
     Work = [{1, {node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]}}],
-    {ok, _} = reliable:enqueue(basic, Work),
+    {ok, _} = reliable:enqueue(<<"basic">>, Work),
 
     %% Sleep for 5 seconds for write to happen.
     timer:sleep(5000),
@@ -80,7 +80,7 @@ index_test(_Config) ->
         {2, {node(), riakc_pb_socket, update_type,
             [{symbolic, riakc}, {<<"sets">>, <<"users">>}, <<"users">>, riakc_set:to_op(Index1)]}}
     ],
-    {ok, _} = reliable:enqueue(cmeik, Work),
+    {ok, _} = reliable:enqueue(<<"cmeik">>, Work),
 
     %% Sleep for 5 seconds for write to happen.
     timer:sleep(5000),
@@ -107,7 +107,6 @@ workflow_error_test(_) ->
 
 
 workflow_test(_) ->
-
     Object = riakc_obj:new(<<"users">>, <<"aramallo">>, <<"something_else">>),
     Index = riakc_set:new(),
     Index1 = riakc_set:add_element(<<"aramallo">>, Index),

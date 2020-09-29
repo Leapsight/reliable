@@ -115,7 +115,7 @@ enqueue(WorkId, WorkItems) ->
     WorkId :: work_id(), WorkItems :: [work_item()], Opts :: opts()) ->
     {ok, Instance :: binary()} | {error, term()}.
 
-enqueue(WorkId, WorkItems0, Opts) ->
+enqueue(WorkId, WorkItems0, Opts) when is_binary(WorkId) ->
     %% Add result field expected by reliable_worker:work_item().
     WorkItems = lists:map(
         fun({Id, MFA}) -> {Id, MFA, undefined} end,

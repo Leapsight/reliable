@@ -43,7 +43,7 @@ init() ->
 enqueue(Reference, Bucket, {WorkId, WorkItems}) ->
     Object = riakc_obj:new(
         Bucket,
-        term_to_binary(WorkId),
+        WorkId,
         term_to_binary(WorkItems)
     ),
     riakc_pb_socket:put(Reference, Object).
