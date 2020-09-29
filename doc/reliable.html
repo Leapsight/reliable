@@ -29,15 +29,15 @@
 
 
 <h3 class="typedecl"><a name="type-scheduled_item">scheduled_item()</a></h3>
-<p><tt>scheduled_item() = <a href="reliable_storage_backend.html#type-work_item">reliable_storage_backend:work_item()</a> | fun(() -&gt; <a href="reliable_storage_backend.html#type-work_item">reliable_storage_backend:work_item()</a>)</tt></p>
+<p><tt>scheduled_item() = <a href="reliable_worker.html#type-work_item">reliable_worker:work_item()</a> | fun(() -&gt; <a href="reliable_worker.html#type-work_item">reliable_worker:work_item()</a>)</tt></p>
 
 
 <h3 class="typedecl"><a name="type-work_id">work_id()</a></h3>
-<p><tt>work_id() = <a href="reliable_storage_backend.html#type-work_id">reliable_storage_backend:work_id()</a></tt></p>
+<p><tt>work_id() = <a href="reliable_worker.html#type-work_id">reliable_worker:work_id()</a></tt></p>
 
 
 <h3 class="typedecl"><a name="type-work_item">work_item()</a></h3>
-<p><tt>work_item() = [{<a href="reliable_storage_backend.html#type-work_item_id">reliable_storage_backend:work_item_id()</a>, <a href="reliable_storage_backend.html#type-work_item">reliable_storage_backend:work_item()</a>}]</tt></p>
+<p><tt>work_item() = [{<a href="reliable_worker.html#type-work_item_id">reliable_worker:work_item_id()</a>, <a href="reliable_worker.html#type-work_item">reliable_worker:work_item()</a>}]</tt></p>
 
 
 <h3 class="typedecl"><a name="type-workflow_item">workflow_item()</a></h3>
@@ -53,8 +53,8 @@
 
 
 <h2><a name="index">Function Index</a></h2>
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#abort-1">abort/1</a></td><td>When called within the functional object in <a href="#workflow-2"><code>workflow/2</code></a>,  
-makes the workflow silently return the tuple {aborted, Reason} as the  
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#abort-1">abort/1</a></td><td>When called within the functional object in <a href="#workflow-2"><code>workflow/2</code></a>,
+makes the workflow silently return the tuple {aborted, Reason} as the
 error reason.</td></tr>
 <tr><td valign="top"><a href="#add_workflow_items-1">add_workflow_items/1</a></td><td>Adds a workflow item to the workflow stack.</td></tr>
 <tr><td valign="top"><a href="#add_workflow_precedence-2">add_workflow_precedence/2</a></td><td>Relates on or more workflow items in a precedence relationship.</td></tr>
@@ -82,10 +82,10 @@ error reason.</td></tr>
 <h3 class="function"><a name="abort-1">abort/1</a></h3>
 <div class="spec">
 <p><tt>abort(Reason::any()) -&gt; no_return()</tt><br></p>
-</div><p><p>When called within the functional object in <a href="#workflow-2"><code>workflow/2</code></a>,  
-makes the workflow silently return the tuple {aborted, Reason} as the  
+</div><p><p>When called within the functional object in <a href="#workflow-2"><code>workflow/2</code></a>,
+makes the workflow silently return the tuple {aborted, Reason} as the
 error reason.</p>
- 
+
   Termination of a Babel workflow means that an exception is thrown to an
   enclosing catch. Thus, the expression <code>catch babel:abort(foo)</code> does not
   terminate the workflow.</p>
@@ -163,43 +163,43 @@ error reason.</p>
 <h3 class="function"><a name="workflow-2">workflow/2</a></h3>
 <div class="spec">
 <p><tt>workflow(Fun::fun(() -&gt; any()), Opts::<a href="#type-opts">opts()</a>) -&gt; {ok, {WorkId::binary(), ResultOfFun::any()}} | {error, Reason::any()} | no_return()</tt><br></p>
-</div><p><p>Executes the functional object <code>Fun</code> as a Reliable workflow, i.e.  
+</div><p><p>Executes the functional object <code>Fun</code> as a Reliable workflow, i.e.
 ordering and scheduling all resulting Riak KV object writes and deletes.</p>
- 
+
   <p>Any function that executes inside the workflow that wants to be able to
   schedule work to Riak KV, needs to use the infrastructure provided in this
   module to add workflow items to the workflow stack
   (see <a href="#add_workflow_items-1"><code>add_workflow_items/1</code></a>) and to add the precedence amongst them
   (see <a href="#add_workflow_precedence-2"><code>add_workflow_precedence/2</code></a>).</p>
- 
-  <p>Any other operation, including reading and writing from/to Riak KV by  
-directly using the Riak Client library will work as normal and  
-will not affect the workflow. Only by calling the special functions in this  
+
+  <p>Any other operation, including reading and writing from/to Riak KV by
+directly using the Riak Client library will work as normal and
+will not affect the workflow. Only by calling the special functions in this
 module you can add work items to the workflow.</p>
- 
+
   <p>If something goes wrong inside the workflow as a result of a user
   error or general exception, the entire workflow is terminated and the
   function raises an exception. In case of an internal error, the function
   returns the tuple <code>{error, Reason}</code>.</p>
- 
+
   <p>If everything goes well, the function returns the tuple
   <code>{ok, {WorkId, ResultOfFun}}</code> where <code>WorkId</code> is the identifier for the
   workflow scheduled by Reliable and <code>ResultOfFun</code> is the value of the last
   expression in <code>Fun</code>.</p>
- 
-  <p>&gt; Notice that calling this function schedules the work to Reliable, you need  
-to use the WorkId to check with Reliable the status of the workflow  
+
+  <p>&gt; Notice that calling this function schedules the work to Reliable, you need
+to use the WorkId to check with Reliable the status of the workflow
 execution.</p>
- 
+
   <p>The resulting workflow execution will schedule the writes and deletes in the
   order defined by the dependency graph constructed using
   <a href="#add_workflow_precedence-2"><code>add_workflow_precedence/2</code></a>.</p>
- 
+
   <p>&gt; If you want to manually determine the execution order of the workflow you
   should use the <a href="#enqueue-2"><code>enqueue/2</code></a> function instead.</p>
- 
+
   <p>The <code>Opts</code> argument offers the following options:</p>
- 
+
   <p>* <code>on_terminate` – a functional object `fun((Reason :: any()) -&gt; ok)</code>. This
   function will be evaluated before the call terminates. In case of successful
   termination the value <code>normal</code> will be  passed as argument. Otherwise, in
@@ -208,9 +208,9 @@ execution.</p>
   connection object to a pool. Notice that this function might be called
   multiple times in the case of nested workflows. If you need to conditionally
   perform a cleanup operation within the functional object only at the end of
-  the workflow call, you can use the function <code>is_nested_workflow/0</code>  
+  the workflow call, you can use the function <code>is_nested_workflow/0</code>
 to take a decision.</p>
- 
+
   Calls to this function can be nested and the result is exactly the same as it
   would without a nested call i.e. nesting workflows does not provide any kind
   of stratification and thus there is no implicit precedence relationship
