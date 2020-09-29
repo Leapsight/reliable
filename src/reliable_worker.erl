@@ -276,8 +276,17 @@ process_work(State) ->
 
     ?LOG_DEBUG("Attempting to delete completed work: ~p", [AllCompleted]),
 
-    %% Delete items outside of iterator to ensure delete is safe.
-    ok = BackendMod:delete_all(Reference, Bucket, AllCompleted),
+    _ = lists:foreach(
+        fun(WorkId) ->
+            %% Delete items outside of iterator to ensure delete is safe.
+            ok = BackendMod:delete(Reference, Bucket, WorkId),
+            %% Notify subscribers
+            WorkRef = {work_ref, Bucket, WorkId},
+            reliable_event_manager:notify({completed, WorkRef})
+        end,
+        AllCompleted
+    ),
+
     ok.
 
 
