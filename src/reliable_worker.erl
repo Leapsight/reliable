@@ -44,7 +44,13 @@
     Payload :: [{work_item_id(), work_item(), work_item_result()}]
 }.
 
+-type work_ref()    ::  {
+    work_ref,
+    Instance :: binary(),
+    Id :: binary()
+}.
 
+-export_type([work_ref/0]).
 -export_type([work_id/0]).
 -export_type([work_item_id/0]).
 -export_type([work_item_result/0]).
@@ -66,7 +72,8 @@ start_link(Name, Bucket) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(work(), binary() | undefined) -> ok | {error, term()}.
+-spec enqueue(work(), binary() | undefined) ->
+    {ok, work_ref()} | {error, term()}.
 
 enqueue(Work, PartitionKey) ->
     Instance = binary_to_atom(reliable_config:instance(PartitionKey), utf8),
@@ -110,7 +117,8 @@ handle_continue(schedule_work, State) ->
     {noreply, State}.
 
 
-handle_call({enqueue, Work}, _From, #state{bucket = Bucket} = State) ->
+handle_call(
+    {enqueue, {WorkId, _} = Work}, _From, #state{bucket = Bucket} = State) ->
     %% TODO: Deduplicate here.
     %% TODO: Replay once completed.
     ?LOG_INFO("Enqueuing work: ~p, instance: ~p", [Work, Bucket]),
@@ -120,7 +128,8 @@ handle_call({enqueue, Work}, _From, #state{bucket = Bucket} = State) ->
 
     case BackendMod:enqueue(Ref, Bucket, Work) of
         ok ->
-            {reply, ok, State};
+            WorkRef = {work_ref, Bucket,  WorkId},
+            {reply, {ok, WorkRef}, State};
         {error, Reason} ->
             {reply, {error, Reason}, State}
     end;

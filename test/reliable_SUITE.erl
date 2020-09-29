@@ -3,6 +3,8 @@
 -include_lib("stdlib/include/assert.hrl").
 
 -export([all/0,
+         init_per_suite/1,
+         end_per_suite/1,
          init_per_testcase/2,
          end_per_testcase/2]).
 
@@ -54,7 +56,7 @@ basic_test(_Config) ->
     %% Enqueue a write into Riak.
     Object = riakc_obj:new(<<"groceries">>, <<"mine">>, <<"eggs & bacon">>),
     Work = [{1, {node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]}}],
-    ok = reliable:enqueue(basic, Work),
+    {ok, _} = reliable:enqueue(basic, Work),
 
     %% Sleep for 5 seconds for write to happen.
     timer:sleep(5000),
@@ -78,7 +80,7 @@ index_test(_Config) ->
         {2, {node(), riakc_pb_socket, update_type,
             [{symbolic, riakc}, {<<"sets">>, <<"users">>}, <<"users">>, riakc_set:to_op(Index1)]}}
     ],
-    ok = reliable:enqueue(cmeik, Work),
+    {ok, _} = reliable:enqueue(cmeik, Work),
 
     %% Sleep for 5 seconds for write to happen.
     timer:sleep(5000),
@@ -95,7 +97,7 @@ index_test(_Config) ->
 
 
 workflow_do_nothing_test(_) ->
-    {ok, {_, ok}} = reliable:workflow(fun() -> ok end).
+    {ok, ok} = reliable:workflow(fun() -> ok end).
 
 
 workflow_error_test(_) ->
@@ -139,7 +141,7 @@ workflow_test(_) ->
             ok
     end),
 
-    {ok, {_Id, ok}} = reliable:workflow(Fun),
+    {scheduled, _, ok} = reliable:workflow(Fun),
 
     %% Sleep for 5 seconds for write to happen.
     timer:sleep(5000),

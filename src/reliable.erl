@@ -64,6 +64,7 @@
                                     {update | delete, scheduled_item()}
                                 }.
 
+
 -export_type([work_id/0]).
 -export_type([work_item/0]).
 -export_type([opts/0]).
@@ -99,7 +100,8 @@
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(WorkId :: work_id(), WorkItems :: [work_item()]) -> ok.
+-spec enqueue(WorkId :: work_id(), WorkItems :: [work_item()]) ->
+    {ok, Instance :: binary()} | {error, term()}.
 
 enqueue(WorkId, WorkItems) ->
     enqueue(WorkId, WorkItems, #{}).
@@ -111,7 +113,7 @@ enqueue(WorkId, WorkItems) ->
 %% -----------------------------------------------------------------------------
 -spec enqueue(
     WorkId :: work_id(), WorkItems :: [work_item()], Opts :: opts()) ->
-    ok.
+    {ok, Instance :: binary()} | {error, term()}.
 
 enqueue(WorkId, WorkItems0, Opts) ->
     %% Add result field expected by reliable_worker:work_item().
@@ -212,7 +214,8 @@ abort(Reason) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec workflow(Fun :: fun(() -> any())) ->
-    {ok, {WorkId :: binary(), ResultOfFun :: any()}}
+    {ok, ResultOfFun :: any()}
+    | {scheduled, WorkRef :: reliable_worker:work_ref(), ResultOfFun :: any()}
     | {error, Reason :: any()}
     | no_return().
 
@@ -278,18 +281,25 @@ workflow(Fun) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec workflow(Fun ::fun(() -> any()), Opts :: opts()) ->
-    {ok, {WorkId :: binary(), ResultOfFun :: any()}}
+    {ok, ResultOfFun :: any()}
+    | {scheduled, WorkRef :: reliable_worker:work_ref(), ResultOfFun :: any()}
     | {error, Reason :: any()}
     | no_return().
 
 workflow(Fun, Opts) when is_function(Fun, 0) ->
-    {ok, WorkId} = init_workflow(Opts),
+    ok = init_workflow(Opts),
     try
         %% Fun should use this module functions which are workflow aware.
         Result = Fun(),
-        ok = maybe_enqueue_workflow(),
-        ok = on_terminate(normal, Opts),
-        {ok, {WorkId, Result}}
+        case maybe_enqueue_workflow() of
+            ok ->
+                %%  This is a nested workflow so we do not return
+                ok = on_terminate(normal, Opts),
+                {ok, Result};
+            {ok, WorkRef} ->
+                ok = on_terminate(normal, Opts),
+                {scheduled, WorkRef, Result}
+        end
     catch
         throw:Reason:Stacktrace ->
             ?LOG_ERROR(#{
@@ -431,11 +441,11 @@ init_workflow(Opts) ->
                 ?RELIABLE_PARTITION_KEY,
                 maps:get(partition_key, Opts, undefined)
             ),
-            {ok, Id};
-        Id ->
+            ok;
+        _Id ->
             %% This is a nested call, we are joining an existing workflow
             ok = increment_nesting_level(),
-            {ok, Id}
+            ok
     end.
 
 
@@ -466,6 +476,8 @@ decrement_nested_count() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+-spec maybe_enqueue_workflow() -> ok | {ok, Instance :: binary()} | no_return().
+
 maybe_enqueue_workflow() ->
     case is_nested_workflow() of
         true ->
@@ -480,18 +492,27 @@ maybe_enqueue_workflow() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+-spec enqueue_workflow() ->
+    ok
+    | {ok, WorkRef :: reliable_worker:work_ref()}
+    | no_return().
+
 enqueue_workflow() ->
     PartitionKey = get(?RELIABLE_PARTITION_KEY),
 
     case prepare_work() of
         {ok, []} ->
             ok;
-        {ok, Work} when PartitionKey == undefined ->
-            enqueue(get(?WORKFLOW_ID), Work);
         {ok, Work} ->
-            enqueue(get(?WORKFLOW_ID), Work, PartitionKey);
-        {error, _} = Error ->
-            Error
+            Opts = #{partition_key => PartitionKey},
+            case enqueue(get(?WORKFLOW_ID), Work, Opts) of
+                {ok, _} = OK ->
+                    OK;
+                {error, Reason} ->
+                    throw(Reason)
+            end;
+        {error, Reason} ->
+            throw(Reason)
     end.
 
 
