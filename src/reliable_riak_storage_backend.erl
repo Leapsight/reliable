@@ -49,13 +49,18 @@ enqueue(Reference, Bucket, {WorkId, WorkItems}) ->
     riakc_pb_socket:put(Reference, Object).
 
 
+delete(Reference, Bucket, WorkId) ->
+    riakc_pb_socket:delete(Reference, Bucket, WorkId).
+
+
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
 delete_all(Reference, Bucket, WorkIds) ->
     _ = lists:foreach(
-        fun(Key) -> riakc_pb_socket:delete(Reference, Bucket, Key) end, WorkIds
+        fun(WorkId) -> delete(Reference, Bucket, WorkId) end,
+        WorkIds
     ),
     ok.
 

@@ -21,7 +21,13 @@
     NewAcc :: any().
 
 
+-callback delete(
+    Ref :: pid(),
+    Bucket :: binary(),
+    WorkId :: reliable_worker:work_id()) -> ok.
+
+
 -callback delete_all(
     Ref :: pid(),
     Bucket :: binary(),
-    AllCompleted :: [reliable_worker:work_item()]) -> ok.
+    AllCompleted :: [reliable_worker:work_id()]) -> ok.
