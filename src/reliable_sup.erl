@@ -42,6 +42,7 @@
 
 
 start_link() ->
+    ok = reliable_config:setup(),
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 
