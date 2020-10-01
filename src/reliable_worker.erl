@@ -299,10 +299,10 @@ process_work({WorkId, Items}, {Acc, State}) ->
             %% We made it through the entire list with a result for
             %% everything, remove.
             ?LOG_DEBUG("work ~p completed!", [WorkId]),
-            Acc ++ [WorkId];
+            {Acc ++ [WorkId], State};
         {false, _, _, _, _} ->
             ?LOG_DEBUG("work ~p NOT YET completed!", [WorkId]),
-            Acc
+            {Acc, State}
     end.
 
 
