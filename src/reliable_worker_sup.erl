@@ -53,7 +53,7 @@ init([]) ->
                 type => worker,
                 modules => [reliable_worker]
             }
-        end || Bucket <- reliable_config:instances()
+        end || Bucket <- reliable_config:partitions()
     ],
 
     {ok, {SupFlags, ChildSpecs}}.

@@ -117,7 +117,7 @@ enqueue(Work, PartitionKey) ->
     {ok, work_ref()} | {error, term()}.
 
 enqueue(Work, PartitionKey, Timeout) ->
-    Instance = binary_to_atom(reliable_config:instance(PartitionKey), utf8),
+    Instance = binary_to_atom(reliable_config:partition(PartitionKey), utf8),
     gen_server:call(Instance, {enqueue, Work}, Timeout).
 
 

@@ -3,9 +3,9 @@
 -define(DEFAULT_BACKEND, reliable_riak_storage_backend).
 
 %% API
--export([instance/1]).
--export([instances/0]).
--export([number_of_instances/0]).
+-export([partition/1]).
+-export([partitions/0]).
+-export([number_of_partitions/0]).
 -export([instance_name/0]).
 -export([riak_host/0]).
 -export([riak_port/0]).
@@ -74,23 +74,23 @@ instance_name() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec number_of_instances() -> [binary()].
+-spec number_of_partitions() -> [binary()].
 
-number_of_instances() ->
-    application:get_env(reliable, number_of_instances, 5).
+number_of_partitions() ->
+    application:get_env(reliable, number_of_partitions, 5).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec instances() -> [binary()].
+-spec partitions() -> [binary()].
 
-instances() ->
+partitions() ->
     Name = instance_name(),
     [
         <<Name/binary, "_work_queue_", (integer_to_binary(X))/binary>>
-        || X <- lists:seq(1, number_of_instances())
+        || X <- lists:seq(1, number_of_partitions())
     ].
 
 
@@ -98,13 +98,13 @@ instances() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec instance(Key :: binary() | undefined) -> binary().
+-spec partition(Key :: binary() | undefined) -> binary().
 
-instance(undefined) ->
-    lists:nth(rand:uniform(number_of_instances()), instances());
+partition(undefined) ->
+    lists:nth(rand:uniform(number_of_partitions()), partitions());
 
-instance(Key) ->
-    N = erlang:phash2(Key) rem number_of_instances() + 1,
-    lists:nth(N, instances()).
+partition(Key) ->
+    N = erlang:phash2(Key) rem number_of_partitions() + 1,
+    lists:nth(N, partitions()).
 
 

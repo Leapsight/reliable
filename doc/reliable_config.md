@@ -9,7 +9,7 @@
 ## Function Index ##
 
 
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#instance-1">instance/1</a></td><td></td></tr><tr><td valign="top"><a href="#instance_name-0">instance_name/0</a></td><td></td></tr><tr><td valign="top"><a href="#instances-0">instances/0</a></td><td></td></tr><tr><td valign="top"><a href="#number_of_instances-0">number_of_instances/0</a></td><td></td></tr><tr><td valign="top"><a href="#riak_host-0">riak_host/0</a></td><td></td></tr><tr><td valign="top"><a href="#riak_port-0">riak_port/0</a></td><td></td></tr><tr><td valign="top"><a href="#setup-0">setup/0</a></td><td></td></tr><tr><td valign="top"><a href="#storage_backend-0">storage_backend/0</a></td><td></td></tr></table>
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#instance-1">instance/1</a></td><td></td></tr><tr><td valign="top"><a href="#instance_name-0">instance_name/0</a></td><td></td></tr><tr><td valign="top"><a href="#instances-0">instances/0</a></td><td></td></tr><tr><td valign="top"><a href="#number_of_partitions-0">number_of_partitions/0</a></td><td></td></tr><tr><td valign="top"><a href="#riak_host-0">riak_host/0</a></td><td></td></tr><tr><td valign="top"><a href="#riak_port-0">riak_port/0</a></td><td></td></tr><tr><td valign="top"><a href="#setup-0">setup/0</a></td><td></td></tr><tr><td valign="top"><a href="#storage_backend-0">storage_backend/0</a></td><td></td></tr></table>
 
 
 <a name="functions"></a>
@@ -21,7 +21,7 @@
 ### instance/1 ###
 
 <pre><code>
-instance(Key::binary() | undefined) -&gt; binary()
+partition(Key::binary() | undefined) -&gt; binary()
 </code></pre>
 <br />
 
@@ -39,16 +39,16 @@ instance_name() -&gt; [binary()]
 ### instances/0 ###
 
 <pre><code>
-instances() -&gt; [binary()]
+partitions() -&gt; [binary()]
 </code></pre>
 <br />
 
-<a name="number_of_instances-0"></a>
+<a name="number_of_partitions-0"></a>
 
-### number_of_instances/0 ###
+### number_of_partitions/0 ###
 
 <pre><code>
-number_of_instances() -&gt; [binary()]
+number_of_partitions() -&gt; [binary()]
 </code></pre>
 <br />
 
