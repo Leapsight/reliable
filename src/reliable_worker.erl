@@ -242,9 +242,9 @@ schedule_work() ->
 
 process_work(State) ->
     ?LOG_INFO("Fetching work."),
-    BackendMod = State#state.backend,
+    Mod = State#state.backend,
     Bucket = State#state.bucket,
-    Reference = State#state.reference,
+    Ref = State#state.reference,
 
     %% Iterate through work that needs to be done.
     %%
@@ -255,17 +255,19 @@ process_work(State) ->
 
     %% We do not use the continuation, we simply query again on the next
     %% scheduled run.
-    Opts = #{max_results => 100},
-    {Completed, _Cont} = BackendMod:fold(
-        Reference, Bucket, fun process_work/2, {[], State}, Opts
-    ),
 
+    Acc0 = {[], State},
+    Opts = #{max_results => 100},
+
+    {Acc1, _Cont} = Mod:fold(Ref, Bucket, fun process_work/2, Acc0, Opts),
+
+    {Completed, State} = Acc1,
     ?LOG_DEBUG("Attempting to delete completed work: ~p", [Completed]),
 
     _ = lists:foreach(
         fun(WorkId) ->
             %% Delete items outside of iterator to ensure delete is safe.
-            ok = BackendMod:delete(Reference, Bucket, WorkId),
+            ok = Mod:delete(Ref, Bucket, WorkId),
             %% Notify subscribers
             WorkRef = {work_ref, Bucket, WorkId},
             ok = reliable_event_manager:notify({reliable, completed, WorkRef})
