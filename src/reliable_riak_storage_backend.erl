@@ -125,7 +125,7 @@ fold(Reference, Bucket, Function, Acc, Opts) ->
     %% Get list of the keys in the bucket.
     %% We use the $bucket secondary index so that we can do pagination with
     %% sorting.
-    {ok, Result} = riakc_pb_socket:get_index_eq(
+    {ok, IndexResult} = riakc_pb_socket:get_index_eq(
         Reference,
         Bucket,
         <<"$bucket">>,
@@ -133,7 +133,7 @@ fold(Reference, Bucket, Function, Acc, Opts) ->
         ReqOpts
     ),
 
-    #index_results_v1{keys = Keys, continuation = Cont1} = Result,
+    #index_results_v1{keys = Keys, continuation = Cont1} = IndexResult,
 
     ?LOG_DEBUG("Got work keys: ~p", [Keys]),
 
