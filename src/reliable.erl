@@ -101,7 +101,7 @@
 %% @end
 %% -----------------------------------------------------------------------------
 -spec enqueue(WorkId :: work_id(), WorkItems :: [work_item()]) ->
-    {ok, Instance :: binary()} | {error, term()}.
+    {ok, Instance :: reliable_worker:work_ref()} | {error, term()}.
 
 enqueue(WorkId, WorkItems) ->
     enqueue(WorkId, WorkItems, #{}).
@@ -113,7 +113,7 @@ enqueue(WorkId, WorkItems) ->
 %% -----------------------------------------------------------------------------
 -spec enqueue(
     WorkId :: work_id(), WorkItems :: [work_item()], Opts :: opts()) ->
-    {ok, Instance :: binary()} | {error, term()}.
+    {ok, Instance :: reliable_worker:work_ref()} | {error, term()}.
 
 enqueue(WorkId, WorkItems0, Opts) when is_binary(WorkId) ->
     %% Add result field expected by reliable_worker:work_item().
