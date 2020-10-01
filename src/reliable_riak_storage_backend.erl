@@ -12,7 +12,7 @@
          delete/3,
          delete_all/3,
          update/4,
-         fold/4]).
+         fold/5]).
 
 
 
@@ -119,7 +119,9 @@ update(Reference, Bucket, WorkId, WorkItems) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-fold(Reference, Bucket, Function, Acc) ->
+
+fold(Reference, Bucket, Function, Acc, Opts) ->
+    ReqOpts = fold_opts(Opts),
     %% Get list of the keys in the bucket.
     %% We use the $bucket secondary index so that we can do pagination with
     %% sorting.
@@ -128,11 +130,10 @@ fold(Reference, Bucket, Function, Acc) ->
         Bucket,
         <<"$bucket">>,
         <<>>,
-        %% TODO At the moment we are not paginating, just sorting
-        [{pagination_sort, true}]
+        ReqOpts
     ),
 
-    #index_results_v1{keys = Keys, continuation = _Cont} = Result,
+    #index_results_v1{keys = Keys, continuation = Cont1} = Result,
 
     ?LOG_DEBUG("Got work keys: ~p", [Keys]),
 
@@ -152,5 +153,28 @@ fold(Reference, Bucket, Function, Acc) ->
                 Acc1
         end
     end,
-    lists:foldl(FoldFun, Acc, Keys).
+    Result = lists:foldl(FoldFun, Acc, Keys),
+    {Result, Cont1}.
 
+
+
+
+%% =============================================================================
+%% PRIVATE
+%% =============================================================================
+
+
+
+%% @private
+fold_opts(Opts0) ->
+    Default = #{
+        max_results => 10,
+        pagination_sort => true
+    },
+    Opts1 = maps:merge(Default, Opts0),
+    case maps:get(continuation, Opts1, undefined) of
+        undefined ->
+            maps:to_list(Opts1);
+        Cont0 ->
+            maps:to_list(Opts1#{continuation => Cont0})
+    end.

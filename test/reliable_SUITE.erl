@@ -97,7 +97,7 @@ index_test(_Config) ->
 
 
 workflow_do_nothing_test(_) ->
-    {ok, ok} = reliable:workflow(fun() -> ok end).
+    {ok, foo} = reliable:workflow(fun() -> foo end).
 
 
 workflow_error_test(_) ->

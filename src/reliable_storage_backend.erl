@@ -17,7 +17,11 @@
 
 
 -callback fold(
-    Ref :: pid(), Bucket :: binary(), Fun :: function(), Acc :: any()) ->
+    Ref :: pid(),
+    Bucket :: binary(),
+    Fun :: function(),
+    Acc :: any(),
+    Opts :: map()) ->
     NewAcc :: any().
 
 
