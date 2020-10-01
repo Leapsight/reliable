@@ -170,7 +170,7 @@ handle_call(
     case BackendMod:enqueue(Ref, Bucket, Work) of
         ok ->
             WorkRef = {work_ref, Bucket, WorkId},
-            ok = gen_server:reply(From, {ok, WorkRef}),
+            _ = gen_server:reply(From, {ok, WorkRef}),
             ok = reliable_event_manager:notify({reliable, scheduled, WorkRef}),
             {noreply, State};
         {error, Reason} ->
