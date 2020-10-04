@@ -33,7 +33,7 @@
 -type work_ref()    ::  {
     work_ref,
     Instance :: binary(),
-    Id :: binary()
+    WorkId :: work_id()
 }.
 
 -export_type([work_ref/0]).
@@ -106,7 +106,7 @@ status({work_ref, Instance, WorkId}, Timeout) ->
     {ok, work_ref()} | {error, term()}.
 
 enqueue(Work, PartitionKey) ->
-    enqueue(Work, PartitionKey, 5000).
+    enqueue(Work, PartitionKey, 30000).
 
 
 %% -----------------------------------------------------------------------------

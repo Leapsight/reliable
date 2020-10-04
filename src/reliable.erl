@@ -37,7 +37,6 @@
 -define(WORKFLOW_ID, reliable_workflow_id).
 -define(WORKFLOW_LEVEL, reliable_workflow_level).
 -define(WORKFLOW_GRAPH, reliable_digraph).
--define(RELIABLE_PARTITION_KEY, reliable_partition_key).
 
 
 -type work_id()             ::  reliable_worker:work_id().
@@ -46,10 +45,12 @@
                                     reliable_worker:work_item()
                                 }].
 -type opts()                ::  #{
+                                    work_id => work_id(),
                                     partition_key => binary()
                                 }.
 
 -type workflow_opts()       ::  #{
+                                    work_id => work_id(),
                                     partition_key => binary(),
                                     on_terminate => fun((Reason :: any()) -> any())
                                 }.
@@ -76,8 +77,8 @@
 -export([abort/1]).
 -export([add_workflow_items/1]).
 -export([add_workflow_precedence/2]).
+-export([enqueue/1]).
 -export([enqueue/2]).
--export([enqueue/3]).
 -export([ensure_in_workflow/0]).
 -export([find_workflow_item/1]).
 -export([get_workflow_item/1]).
@@ -100,29 +101,30 @@
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(WorkId :: work_id(), WorkItems :: [work_item()]) ->
+-spec enqueue(WorkItems :: [work_item()]) ->
     {ok, Instance :: reliable_worker:work_ref()} | {error, term()}.
 
-enqueue(WorkId, WorkItems) ->
-    enqueue(WorkId, WorkItems, #{}).
+enqueue(WorkItems) ->
+    enqueue(WorkItems, #{}).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(
-    WorkId :: work_id(), WorkItems :: [work_item()], Opts :: opts()) ->
+-spec enqueue(WorkItems :: [work_item()], Opts :: opts()) ->
     {ok, Instance :: reliable_worker:work_ref()} | {error, term()}.
 
-enqueue(WorkId, WorkItems0, Opts) when is_binary(WorkId) ->
+enqueue(WorkItems0, Opts) ->
     %% Add result field expected by reliable_worker:work_item().
     WorkItems = lists:map(
-        fun({Id, MFA}) -> {Id, MFA, undefined} end,
+        fun({_, _} = Tuple) -> erlang:append_element(Tuple, undefined) end,
         WorkItems0
     ),
+    WorkId = get_work_id(Opts),
     PartitionKey = maps:get(partition_key, Opts, undefined),
-    reliable_worker:enqueue({WorkId, WorkItems}, PartitionKey).
+    Timeout = maps:get(timeout, Opts, 30000),
+    reliable_worker:enqueue({WorkId, WorkItems}, PartitionKey, Timeout).
 
 
 %% -----------------------------------------------------------------------------
@@ -301,7 +303,7 @@ workflow(Fun, Opts) when is_function(Fun, 0) ->
     try
         %% Fun should use this module functions which are workflow aware.
         Result = Fun(),
-        case maybe_enqueue_workflow() of
+        case maybe_enqueue_workflow(Opts) of
             ok ->
                 %%  This is a nested workflow so we do not return
                 ok = on_terminate(normal, Opts),
@@ -443,14 +445,10 @@ init_workflow(Opts) ->
         undefined ->
             %% We are initiating a new workflow
             %% We store the worflow state in the process dictionary
-            Id = ksuid:gen_id(millisecond),
+            Id = get_work_id(Opts),
             undefined = put(?WORKFLOW_ID, Id),
             undefined = put(?WORKFLOW_LEVEL, 1),
             undefined = put(?WORKFLOW_GRAPH, reliable_digraph:new()),
-            undefined = put(
-                ?RELIABLE_PARTITION_KEY,
-                maps:get(partition_key, Opts, undefined)
-            ),
             ok;
         _Id ->
             %% This is a nested call, we are joining an existing workflow
@@ -486,14 +484,15 @@ decrement_nested_count() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec maybe_enqueue_workflow() -> ok | {ok, Instance :: binary()} | no_return().
+-spec maybe_enqueue_workflow(Opts :: map()) ->
+    ok | {ok, Instance :: binary()} | no_return().
 
-maybe_enqueue_workflow() ->
+maybe_enqueue_workflow(Opts) ->
     case is_nested_workflow() of
         true ->
             ok;
         false ->
-            enqueue_workflow()
+            enqueue_workflow(Opts)
     end.
 
 
@@ -502,20 +501,18 @@ maybe_enqueue_workflow() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue_workflow() ->
+-spec enqueue_workflow(Opts :: map()) ->
     ok
     | {ok, WorkRef :: reliable_worker:work_ref()}
     | no_return().
 
-enqueue_workflow() ->
-    PartitionKey = get(?RELIABLE_PARTITION_KEY),
-
+enqueue_workflow(Opts) ->
     case prepare_work() of
         {ok, []} ->
             ok;
         {ok, Work} ->
-            Opts = #{partition_key => PartitionKey},
-            case enqueue(get(?WORKFLOW_ID), Work, Opts) of
+            NewOpts = maps:put(work_id, get(?WORKFLOW_ID), Opts),
+            case enqueue(Work, NewOpts) of
                 {ok, _} = OK ->
                     OK;
                 {error, Reason} ->
@@ -632,3 +629,18 @@ on_terminate(Reason, #{on_terminate := Fun}) when is_function(Fun, 1) ->
 
 on_terminate(_, _) ->
     ok.
+
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc Gets Id from opts or generates a ksuid
+%% @end
+%% -----------------------------------------------------------------------------
+get_work_id(#{work_id := Id}) when is_binary(Id) ->
+    Id;
+
+get_work_id(#{work_id := Id}) ->
+    error({badarg, {work_id, Id}});
+
+get_work_id(_) ->
+    ksuid:gen_id(millisecond).
