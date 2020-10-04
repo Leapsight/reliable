@@ -6,10 +6,12 @@
 -author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
 
 -record(state, {
-    bucket      ::  binary(),
-    backend     ::  module(),
-    reference   ::  reference() | pid(),
-    symbolics   ::  dict:dict()
+    bucket                  ::  binary(),
+    backend                 ::  module(),
+    reference               ::  reference() | pid(),
+    symbolics               ::  dict:dict(),
+    fetch_work_backoff      ::  backoff:backoff(),
+    fetch_work_timer        ::  reference() | undefined
 }).
 
 %% should be some sort of unique term identifier.
@@ -153,9 +155,9 @@ init([Bucket]) ->
     end.
 
 
-handle_continue(schedule_work, State) ->
-    ok = schedule_work(),
-    {noreply, State}.
+handle_continue(schedule_work, State0) ->
+    State1 = schedule_work(State0),
+    {noreply, State1}.
 
 
 handle_call(
@@ -208,13 +210,20 @@ handle_cast(Msg, State) ->
     {noreply, State}.
 
 
-handle_info(work, #state{} = State) ->
-    ok = process_work(State),
-    ok = schedule_work(),
-    {noreply, State};
+handle_info(
+    {timeout, Ref, fetch_work}, #state{fetch_work_timer = Ref} = State) ->
+    try process_work(State) of
+        ok ->
+            State1 = schedule_work(succeed, State),
+            {noreply, State1}
+    catch
+        error:Reason when Reason == overload orelse Reason == timeout ->
+            State1 = schedule_work(fail, State),
+            {noreply, State1}
+    end;
 
 handle_info(Info, State) ->
-    ?LOG_WARNING("Unhandled info: ~p", [Info]),
+    ?LOG_WARNING("Unhandled info=~p, state=~p", [Info, State]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -232,20 +241,43 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 
+
 %% @private
-schedule_work() ->
-    %% TODO if we get timeout or overload from Riak we should use an
-    %% exponential backoff strategy instead of a fixed time here
-    {ok, _} = timer:send_after(1000, work),
-    ok.
+schedule_work(State) ->
+    Floor = 1000,
+    Ceiling = 60000,
+    B = backoff:type(
+        backoff:init(Floor, Ceiling, self(), fetch_work),
+        jitter
+    ),
+    State#state{
+        fetch_work_backoff = B,
+        fetch_work_timer = backoff:fire(B)
+    }.
 
 
+schedule_work(succeed, #state{fetch_work_backoff = B0} = State) ->
+    {_, B1} = backoff:succeed(B0),
+    State#state{
+        fetch_work_backoff = B1,
+        fetch_work_timer = backoff:fire(B1)
+    };
+
+schedule_work(fail, #state{fetch_work_backoff = B0} = State) ->
+    {_, B1} = backoff:fail(B0),
+    State#state{
+        fetch_work_backoff = B1,
+        fetch_work_timer = backoff:fire(B1)
+    }.
+
+
+
+%% @private
 process_work(State) ->
     ?LOG_INFO("Fetching work."),
     Mod = State#state.backend,
     Bucket = State#state.bucket,
     Ref = State#state.reference,
-
     %% Iterate through work that needs to be done.
     %%
     %% Probably inserting when holding the iterator is a problem too?
@@ -378,3 +410,4 @@ process_work_items(
     ?LOG_INFO("Found work item to be performed: ~p", [Item]),
     ?LOG_DEBUG("Work already performed, advancing to next item."),
     {true, Completed ++ [LastItem], WorkId, Items, State}.
+
