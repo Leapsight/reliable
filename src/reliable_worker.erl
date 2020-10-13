@@ -95,8 +95,8 @@ status(WorkRef) ->
     | {failed, Info :: map()}
     | {error, not_found | any()}.
 
-status({work_ref, Instance, WorkId}, Timeout) ->
-    Instance = binary_to_atom(Instance, utf8),
+status({work_ref, InstanceName, WorkId}, Timeout) ->
+    Instance = binary_to_atom(InstanceName, utf8),
     gen_server:call(Instance, {status, WorkId}, Timeout).
 
 
