@@ -53,25 +53,45 @@
 %% @end
 %% -----------------------------------------------------------------------------
 -module(reliable_event_manager).
+-behaviour(gen_event).
+
+
+-record(state, {
+    callback    :: function() | undefined
+}).
+
 
 %% API
+-export([add_callback/1]).
 -export([add_handler/2]).
 -export([add_handler/3]).
+-export([add_sup_callback/1]).
 -export([add_sup_handler/2]).
 -export([add_sup_handler/3]).
 -export([add_watched_handler/2]).
 -export([add_watched_handler/3]).
+-export([notify/1]).
+-export([notify/2]).
+-export([subscribe/1]).
+-export([subscribe/2]).
 -export([swap_handler/2]).
 -export([swap_handler/3]).
 -export([swap_sup_handler/2]).
 -export([swap_sup_handler/3]).
 -export([swap_watched_handler/2]).
 -export([swap_watched_handler/3]).
--export([notify/1]).
--export([notify/2]).
 -export([sync_notify/1]).
 -export([sync_notify/2]).
+-export([unsubscribe/1]).
+-export([start_link/0]).
 
+%% gen_event callbacks
+-export([init/1]).
+-export([handle_event/2]).
+-export([handle_call/2]).
+-export([handle_info/2]).
+-export([terminate/2]).
+-export([code_change/3]).
 
 
 %% =============================================================================
@@ -79,6 +99,46 @@
 %% =============================================================================
 
 
+start_link() ->
+    case gen_event:start_link({local, ?MODULE}) of
+        {ok, _} = OK ->
+            %% Ads this module as an event handler.
+            %% This is to implement the pubsub capabilities.
+            ok = gen_event:add_handler(?MODULE, {?MODULE, pubsub}, [pubsub]),
+            OK;
+        Error ->
+            Error
+    end.
+
+
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Adds a callback function.
+%% The function needs to have a single argument representing the event that has
+%% been fired.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec add_callback(fun((any()) -> any())) -> {ok, reference()}.
+
+add_callback(Fn) when is_function(Fn, 1) ->
+    Ref = make_ref(),
+    gen_event:add_handler(?MODULE, {?MODULE, Ref}, [Fn]),
+    {ok, Ref}.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Adds a supervised callback function.
+%% The function needs to have a single argument representing the event that has
+%% been fired.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec add_sup_callback(fun((any()) -> any())) -> {ok, reference()}.
+
+add_sup_callback(Fn) when is_function(Fn, 1) ->
+    Ref = make_ref(),
+    gen_event:add_sup_handler(?MODULE, {?MODULE, Ref}, [Fn]),
+    {ok, Ref}.
 
 %% -----------------------------------------------------------------------------
 %% @doc Adds an event handler.
@@ -235,3 +295,92 @@ sync_notify(Event) ->
 %% -----------------------------------------------------------------------------
 sync_notify(Manager, Event) ->
     gen_event:sync_notify(Manager, Event).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Subscribe to events of type Event.
+%% Any events published through update/1 will delivered to the calling process,
+%% along with all other subscribers.
+%% This function will raise an exception if you try to subscribe to the same
+%% event twice from the same process.
+%% This function uses gproc_ps:subscribe/2.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec subscribe(term()) -> ok.
+
+subscribe(EventType) ->
+    true = gproc_ps:subscribe(l, EventType),
+    ok.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Subscribe conditionally to events of type Event.
+%% This function is similar to subscribe/2, but adds a condition in the form of
+%% an ets match specification.
+%% The condition is tested and a message is delivered only if the condition is
+%% true. Specifically, the test is:
+%% `ets:match_spec_run([Msg], ets:match_spec_compile(Cond)) == [true]'
+%% In other words, if the match_spec returns true for a message, that message
+%% is sent to the subscriber.
+%% For any other result from the match_spec, the message is not sent. `Cond ==
+%% undefined' means that all messages will be delivered, which means that
+%% `Cond=undefined' and `Cond=[{'_',[],[true]}]' are equivalent.
+%% This function will raise an exception if you try to subscribe to the same
+%% event twice from the same process.
+%% This function uses `gproc_ps:subscribe_cond/2'.
+%% @end
+%% -----------------------------------------------------------------------------
+subscribe(EventType, MatchSpec) ->
+    true = gproc_ps:subscribe_cond(l, EventType, MatchSpec),
+    ok.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Remove subscription created using `subscribe/1,2'
+%% @end
+%% -----------------------------------------------------------------------------
+unsubscribe(EventType) ->
+    true = gproc_ps:unsubscribe(l, EventType),
+    ok.
+
+
+
+%% =============================================================================
+%% GEN_EVENT CALLBACKS
+%% This is to support adding a fun via add_callback/1 and add_sup_callback/1
+%% =============================================================================
+
+
+
+init([pubsub]) ->
+    {ok, #state{}};
+
+init([Fn]) when is_function(Fn, 1) ->
+    {ok, #state{callback = Fn}}.
+
+
+handle_event({Event, Message}, #state{callback = undefined} = State) ->
+    %% This is the pubsub handler instance
+    %% We notify gproc conditional subscribers
+    _ = gproc_ps:publish_cond(l, Event, Message),
+    {ok, State};
+
+handle_event({Event, Message}, State) ->
+    %% We notify callback funs
+    (State#state.callback)({Event, Message}),
+    {ok, State}.
+
+
+handle_call(_Request, State) ->
+    {ok, ok, State}.
+
+
+handle_info(_Info, State) ->
+    {ok, State}.
+
+
+terminate(_Reason, _State) ->
+    ok.
+
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.

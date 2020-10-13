@@ -9,7 +9,11 @@
         sasl,
         crypto,
         base62,
-        ksuid
+        ksuid,
+        app_config,
+        gproc,
+        backoff,
+        riakc
     ]},
     {env,[]},
     {modules, []},
