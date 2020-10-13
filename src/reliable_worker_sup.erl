@@ -29,7 +29,6 @@ start_link() ->
 
 
 init([]) ->
-
     SupFlags = #{
         strategy => one_for_one,
         intensity => 0,
@@ -53,7 +52,7 @@ init([]) ->
                 type => worker,
                 modules => [reliable_worker]
             }
-        end || Bucket <- reliable_config:partitions()
+        end || Bucket <- reliable_config:local_partitions()
     ],
 
     {ok, {SupFlags, ChildSpecs}}.

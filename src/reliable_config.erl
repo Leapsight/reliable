@@ -19,6 +19,7 @@
 %% API
 -export([partition/1]).
 -export([partitions/0]).
+-export([local_partitions/0]).
 -export([number_of_partitions/0]).
 -export([instances/0]).
 -export([instance_name/0]).
@@ -40,8 +41,8 @@
 
 -spec on_set(Key :: key_value:key(), Value :: any()) -> ok.
 
-on_set(number_of_partitions, Value) when is_integer(Value) ->
-    Partitions = gen_partitions(Value),
+on_set(number_of_partitions, _) ->
+    Partitions = gen_partitions(),
     set(Partitions, Partitions);
 
 on_set(_, _) ->
@@ -147,7 +148,7 @@ instances() ->
 
 
 %% -----------------------------------------------------------------------------
-%% @doc
+%% @doc The instance that is managed by this node
 %% @end
 %% -----------------------------------------------------------------------------
 -spec instance_name() -> [binary()].
@@ -157,31 +158,43 @@ instance_name() ->
 
 
 %% -----------------------------------------------------------------------------
-%% @doc
+%% @doc The number of partitions per instance
 %% @end
 %% -----------------------------------------------------------------------------
 -spec number_of_partitions() -> [binary()].
 
 number_of_partitions() ->
-    app_config:get(?APP, number_of_partitions, 5).
+    app_config:get(?APP, number_of_partitions, 3).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec partitions() -> [binary()].
+-spec partitions() -> [#{binary() => [binary()]}].
 
 partitions() ->
     %% They are set in on_set/2
     case app_config:get(?APP, partitions, undefined) of
         undefined ->
-            Partitions = gen_partitions(number_of_partitions()),
+            Partitions = gen_partitions(),
             app_config:set(?APP, partitions, Partitions),
             Partitions;
         Partitions ->
             Partitions
     end.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec local_partitions() -> [binary()].
+
+local_partitions() ->
+   maps:get(instance_name(), partitions()).
+
+
 
 
 %% -----------------------------------------------------------------------------
@@ -194,9 +207,17 @@ partition(undefined) ->
     lists:nth(rand:uniform(number_of_partitions()), partitions());
 
 partition(Key) ->
-    N = erlang:phash2(Key) rem number_of_partitions() + 1,
-    lists:nth(N, partitions()).
+    Hash = erlang:phash2(Key),
+    Partitions = partitions(),
 
+    %% We choose the instance and its partitions
+    Instances = maps:keys(Partitions),
+    M = Hash rem length(Instances) + 1,
+    MPartitions = maps:get(lists:nth(M, Instances), Partitions),
+
+    %% We choose a partition
+    N = Hash rem number_of_partitions() + 1,
+    lists:nth(N, MPartitions).
 
 
 
@@ -207,9 +228,38 @@ partition(Key) ->
 
 
 
-gen_partitions(N) ->
-    Name = instance_name(),
-    [
-        <<Name/binary, "_work_queue_", (integer_to_binary(X))/binary>>
-        || X <- lists:seq(1, N)
-    ].
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc
+%% If instances are ["foo-0", "foo-1"] and N is 3 this will generate
+%% ```
+%% #{
+%%  "foo-0" => [
+%%         "foo-0_partition_1",
+%%         "foo-0_partition_2",
+%%         "foo-0_partition_3"
+%%    ]
+%%  "foo-1" => [
+%%         "foo-1_partition_1",
+%%         "foo-1_partition_2",
+%%         "foo-1_partition_3"
+%%    ]
+%% }.
+%% '''
+%% @end
+%% -----------------------------------------------------------------------------
+gen_partitions() ->
+    Instances = instances(),
+    N = number_of_partitions(),
+
+    lists:foldl(
+        fun(Name, Acc) ->
+            Partitions = [
+                <<Name/binary, "_partition_", (integer_to_binary(X))/binary>>
+                || X <- lists:seq(1, N)
+            ],
+            maps:put(Name, Partitions, Acc)
+        end,
+        maps:new(),
+        Instances
+    ).
