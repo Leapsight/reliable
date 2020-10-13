@@ -25,6 +25,8 @@ all() ->
     ].
 
 init_per_suite(Config) ->
+    ok = reliable_config:set(instance_name, <<"reliable-test-0">>),
+    ok = reliable_config:set(instances, [<<"reliable-test-0">>]),
     meck:unload(),
     Config.
 

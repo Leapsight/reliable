@@ -42,8 +42,13 @@
 
 
 start_link() ->
-    ok = reliable_config:init(),
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+    try reliable_config:init() of
+        ok ->
+        supervisor:start_link({local, ?MODULE}, ?MODULE, [])
+    catch
+        error:Reason ->
+            {error, Reason}
+    end.
 
 
 

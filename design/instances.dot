@@ -1,0 +1,38 @@
+digraph G {
+    rankdir=LR;
+
+
+    node [shape=box]
+        pod0 [label="my-service-pod-0"]
+        pod1 [label="my-service-pod-1"]
+        pod2 [label="my-service-pod-3"]
+
+    node [shape=cylinder, width=2 fixedsize=shape]
+        bucket0 [label="my-service-pod-0_partition_1"]
+        bucket1 [label="my-service-pod-0_partition_2"]
+        bucket2 [label="my-service-pod-0_partition_3"]
+
+        bucket3 [label="my-service-pod-1_partition_1"]
+        bucket4 [label="my-service-pod-1_partition_2"]
+        bucket5 [label="my-service-pod-1_partition_3"]
+
+        bucket6 [label="my-service-pod-2_partition_1"]
+        bucket7 [label="my-service-pod-2_partition_2"]
+        bucket8 [label="my-service-pod-2_partition_3"]
+
+    edge [arrowtail=vee arrowhead=vee dir=both]
+        pod0 -> bucket0
+        pod0 -> bucket1
+        pod0 -> bucket2
+
+        pod1 -> bucket3
+        pod1 -> bucket4
+        pod1 -> bucket5
+
+        pod2 -> bucket6
+        pod2 -> bucket7
+        pod2 -> bucket8
+
+
+
+}

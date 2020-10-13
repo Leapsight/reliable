@@ -70,7 +70,8 @@ will_set(_Key, Value) ->
 %% -----------------------------------------------------------------------------
 init() ->
     ok = application:set_env(riakc, allow_listing, true),
-    app_config:init(?APP, #{callback_mod => ?MODULE}).
+    ok = app_config:init(?APP, #{callback_mod => ?MODULE}),
+    validate().
 
 
 %% -----------------------------------------------------------------------------
@@ -151,10 +152,10 @@ instances() ->
 %% @doc The instance that is managed by this node
 %% @end
 %% -----------------------------------------------------------------------------
--spec instance_name() -> [binary()].
+-spec instance_name() -> binary() | no_return().
 
 instance_name() ->
-    app_config:get(?APP, instance_name, <<"default">>).
+    app_config:get(?APP, instance_name).
 
 
 %% -----------------------------------------------------------------------------
@@ -192,7 +193,12 @@ partitions() ->
 -spec local_partitions() -> [binary()].
 
 local_partitions() ->
-   maps:get(instance_name(), partitions()).
+    case instance_name() of
+        undefined ->
+            partitions();
+        Name ->
+            maps:get(Name, partitions())
+    end.
 
 
 
@@ -204,10 +210,12 @@ local_partitions() ->
 -spec partition(Key :: binary() | undefined) -> binary().
 
 partition(undefined) ->
-    lists:nth(rand:uniform(number_of_partitions()), partitions());
+    partition(rand:uniform(maps:size(partitions())));
 
-partition(Key) ->
-    Hash = erlang:phash2(Key),
+partition(Key) when is_binary(Key) ->
+    partition(erlang:phash2(Key));
+
+partition(Hash) when is_integer(Hash) ->
     Partitions = partitions(),
 
     %% We choose the instance and its partitions
@@ -225,6 +233,21 @@ partition(Key) ->
 %% =============================================================================
 %% PRIVATE
 %% =============================================================================
+
+validate() ->
+    validate([
+        ?MODULE:get(instance_name, {error, instance_name})
+    ]).
+
+
+validate([{error, Key}|_]) ->
+    error({invalid_config, Key});
+
+validate([_|T]) ->
+    validate(T);
+
+validate([]) ->
+    ok.
 
 
 
@@ -251,6 +274,13 @@ partition(Key) ->
 gen_partitions() ->
     Instances = instances(),
     N = number_of_partitions(),
+
+    %% We validate
+    lists:member(instance_name(), instances())
+    orelse error({
+        invalid_config,
+        "The value for instance_name is in the list of instances."
+    }),
 
     lists:foldl(
         fun(Name, Acc) ->
