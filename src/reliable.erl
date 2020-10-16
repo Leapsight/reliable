@@ -1,5 +1,5 @@
 %% =============================================================================
-%%  babel_reliable.erl -
+%%  reliable.erl -
 %%
 %%  Copyright (c) 2020 Christopher Meiklejohn. All rights reserved.
 %%  Copyright (c) 2020 Leapsight Holdings Limited. All rights reserved.
@@ -124,6 +124,7 @@ enqueue(WorkItems0, Opts) ->
     WorkId = get_work_id(Opts),
     PartitionKey = maps:get(partition_key, Opts, undefined),
     Timeout = maps:get(timeout, Opts, 30000),
+    %% TODO Move this to reliable.erl we should be using a pool to write to all partitions an workers for just the locally managed partitions.
     reliable_worker:enqueue({WorkId, WorkItems}, PartitionKey, Timeout).
 
 
