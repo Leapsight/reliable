@@ -1,37 +1,45 @@
 digraph G {
-    rankdir=LR;
+    rankdir=TD;
+    ranksep=0.5
+    nodesep=0.5
+    splines=false;
 
 
-    node [shape=box]
-        pod0 [label="my-service-pod-0"]
-        pod1 [label="my-service-pod-1"]
-        pod2 [label="my-service-pod-3"]
+    node [shape=box width=2 height=1 fixedsize=true]
+        pod [label="pod" color=gray fontcolor=gray]
 
-    node [shape=cylinder, width=2 fixedsize=shape]
-        bucket0 [label="my-service-pod-0_partition_1"]
-        bucket1 [label="my-service-pod-0_partition_2"]
-        bucket2 [label="my-service-pod-0_partition_3"]
+        pod0 [label="service-0"]
+        pod2 [label="service-N"]
 
-        bucket3 [label="my-service-pod-1_partition_1"]
-        bucket4 [label="my-service-pod-1_partition_2"]
-        bucket5 [label="my-service-pod-1_partition_3"]
+    node [shape=cylinder, width=1.3 height=1 fixedsize=true]
+        partition [label="partition"  color=gray fontcolor=gray]
 
-        bucket6 [label="my-service-pod-2_partition_1"]
-        bucket7 [label="my-service-pod-2_partition_2"]
-        bucket8 [label="my-service-pod-2_partition_3"]
+        bucket0 [label="service-0\npartition_1"]
+        bucket1 [label="service-0\npartition_2"]
+        bucket2 [label="service-0\npartition_3"]
 
-    edge [arrowtail=vee arrowhead=vee dir=both]
-        pod0 -> bucket0
-        pod0 -> bucket1
-        pod0 -> bucket2
+        bucket3 [label="service-N\npartition_1"]
+        bucket4 [label="service-N\npartition_2"]
+        bucket5 [label="service-N\npartition_3"]
 
-        pod1 -> bucket3
-        pod1 -> bucket4
-        pod1 -> bucket5
+    edge [arrowtail=vee arrowhead=vee dir=back]
+        pod -> partition:ne [label="pop" color=gray fontcolor=gray]
+        pod0 -> bucket0:ne
+        pod0 -> bucket1:ne
+        pod0 -> bucket2:ne
 
-        pod2 -> bucket6
-        pod2 -> bucket7
-        pod2 -> bucket8
+        pod2 -> bucket3:ne
+        pod2 -> bucket4:ne
+        pod2 -> bucket5:ne
+
+    edge [arrowtail=vee dir=forward style=dashed]
+        pod -> partition:nw [label="put" color=gray fontcolor=gray]
+        pod0 -> bucket0:nw
+        pod0 -> bucket1:nw
+        pod0 -> bucket2:nw
+        pod0 -> bucket3:nw
+        pod0 -> bucket4:nw
+        pod0 -> bucket5:nw
 
 
 
