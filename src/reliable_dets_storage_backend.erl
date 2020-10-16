@@ -30,7 +30,7 @@
          fold/3]).
 
 init() ->
-    case dets:open_file(?TABLE, [{file, ?FILENAME}]) of 
+    case dets:open_file(?TABLE, [{file, ?FILENAME}]) of
         {ok, Reference} ->
             {ok, Reference};
         {error, Reason} ->
@@ -38,7 +38,7 @@ init() ->
     end.
 
 enqueue(Reference, Work) ->
-    case dets:insert_new(Reference, Work) of 
+    case dets:insert_new(Reference, Work) of
         true ->
             ok;
         {error, Reason} ->
