@@ -21,10 +21,15 @@
   {git,"https://gitlab.com/leapsight/ksuid.git",
        {ref,"c1f00dabddac1e3108bfaf5917cb6674f3b843f2"}},
   0},
+ {<<"pooler">>,{pkg,<<"pooler">>,<<"1.5.3">>},1},
  {<<"riak_pb">>,
   {git,"https://github.com/basho/riak_pb",
        {ref,"08771aba2ce4935b715d32d1b92555efdc3da994"}},
   1},
+ {<<"riak_pool">>,
+  {git,"https://gitlab.com/leapsight/riak_pool.git",
+       {ref,"f9a4b20a899b10e9d15a333e2bfc11febb97256d"}},
+  0},
  {<<"riakc">>,
   {git,"git://github.com/basho/riak-erlang-client.git",
        {ref,"e4efcb7efd6ded616c5f1d7bae5ca36f9dee6bc2"}},
@@ -32,8 +37,10 @@
 [
 {pkg_hash,[
  {<<"backoff">>, <<"83B72ED2108BA1EE8F7D1C22E0B4A00CFE3593A67DBC792799E8CCE9F42F796B">>},
- {<<"gproc">>, <<"CEA02C578589C61E5341FCE149EA36CCEF236CC2ECAC8691FBA408E7EA77EC2F">>}]},
+ {<<"gproc">>, <<"CEA02C578589C61E5341FCE149EA36CCEF236CC2ECAC8691FBA408E7EA77EC2F">>},
+ {<<"pooler">>, <<"898CD1FA301FC42D4A8ED598CE139B71CA85B54C16AB161152B5CC5FBDCFA1A8">>}]},
 {pkg_hash_ext,[
  {<<"backoff">>, <<"CF0CFFF8995FB20562F822E5CC47D8CCF664C5ECDC26A684CBE85C225F9D7C39">>},
- {<<"gproc">>, <<"580ADAFA56463B75263EF5A5DF4C86AF321F68694E7786CB057FD805D1E2A7DE">>}]}
+ {<<"gproc">>, <<"580ADAFA56463B75263EF5A5DF4C86AF321F68694E7786CB057FD805D1E2A7DE">>},
+ {<<"pooler">>, <<"058D85C5081289B90E97E4DDDBC3BB5A3B4A19A728AB3BC88C689EFCC36A07C7">>}]}
 ].
