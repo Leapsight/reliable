@@ -39,10 +39,10 @@
 -define(WORKFLOW_GRAPH, reliable_digraph).
 
 
--type work_id()             ::  reliable_worker:work_id().
+-type work_id()             ::  reliable_partition_worker:work_id().
 -type work_item()           ::  [{
-                                    reliable_worker:work_item_id(),
-                                    reliable_worker:work_item()
+                                    reliable_partition_worker:work_item_id(),
+                                    reliable_partition_worker:work_item()
                                 }].
 -type opts()                ::  #{
                                     work_id => work_id(),
@@ -54,9 +54,9 @@
                                     partition_key => binary(),
                                     on_terminate => fun((Reason :: any()) -> any())
                                 }.
--type scheduled_item()      ::  reliable_worker:work_item()
+-type scheduled_item()      ::  reliable_partition_worker:work_item()
                                 | fun(
-                                    () -> reliable_worker:work_item()
+                                    () -> reliable_partition_worker:work_item()
                                 ).
 
 -type workflow_item_id()    ::  term().
@@ -102,7 +102,7 @@
 %% @end
 %% -----------------------------------------------------------------------------
 -spec enqueue(WorkItems :: [work_item()]) ->
-    {ok, Instance :: reliable_worker:work_ref()} | {error, term()}.
+    {ok, Instance :: reliable_partition_worker:work_ref()} | {error, term()}.
 
 enqueue(WorkItems) ->
     enqueue(WorkItems, #{}).
@@ -113,30 +113,33 @@ enqueue(WorkItems) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec enqueue(WorkItems :: [work_item()], Opts :: opts()) ->
-    {ok, Instance :: reliable_worker:work_ref()} | {error, term()}.
+    {ok, Instance :: reliable_partition_worker:work_ref()} | {error, term()}.
 
 enqueue(WorkItems0, Opts) ->
-    %% Add result field expected by reliable_worker:work_item().
+
+    PartitionKey = maps:get(partition_key, Opts, undefined),
+    Name = binary_to_atom(reliable_config:partition(PartitionKey), utf8),
+    Timeout = maps:get(timeout, Opts, 30000),
+
+    WorkId = get_work_id(Opts),
+    %% Add result field expected by reliable_partition_worker:work_item().
     WorkItems = lists:map(
         fun({_, _} = Tuple) -> erlang:append_element(Tuple, undefined) end,
         WorkItems0
     ),
-    WorkId = get_work_id(Opts),
-    PartitionKey = maps:get(partition_key, Opts, undefined),
-    Timeout = maps:get(timeout, Opts, 30000),
-    %% TODO Move this to reliable.erl we should be using a pool to write to all partitions an workers for just the locally managed partitions.
-    reliable_worker:enqueue({WorkId, WorkItems}, PartitionKey, Timeout).
+
+    reliable_partition_store:enqueue(Name, {WorkId, WorkItems}, Timeout).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkRef :: reliable_worker:work_ref()) ->
+-spec status(WorkRef :: reliable_partition_worker:work_ref()) ->
     not_found | {in_progress, Info :: map()} | {failed, Info :: map()}.
 
 status(WorkerRef) ->
-    reliable_worker:status(WorkerRef).
+    reliable_partition_worker:status(WorkerRef).
 
 
 %% -----------------------------------------------------------------------------
@@ -228,7 +231,7 @@ abort(Reason) ->
 %% -----------------------------------------------------------------------------
 -spec workflow(Fun :: fun(() -> any())) ->
     {ok, ResultOfFun :: any()}
-    | {scheduled, WorkRef :: reliable_worker:work_ref(), ResultOfFun :: any()}
+    | {scheduled, WorkRef :: reliable_partition_worker:work_ref(), ResultOfFun :: any()}
     | {error, Reason :: any()}
     | no_return().
 
@@ -295,7 +298,7 @@ workflow(Fun) ->
 %% -----------------------------------------------------------------------------
 -spec workflow(Fun ::fun(() -> any()), Opts :: opts()) ->
     {ok, ResultOfFun :: any()}
-    | {scheduled, WorkRef :: reliable_worker:work_ref(), ResultOfFun :: any()}
+    | {scheduled, WorkRef :: reliable_partition_worker:work_ref(), ResultOfFun :: any()}
     | {error, Reason :: any()}
     | no_return().
 
@@ -504,7 +507,7 @@ maybe_enqueue_workflow(Opts) ->
 %% -----------------------------------------------------------------------------
 -spec enqueue_workflow(Opts :: map()) ->
     ok
-    | {ok, WorkRef :: reliable_worker:work_ref()}
+    | {ok, WorkRef :: reliable_partition_worker:work_ref()}
     | no_return().
 
 enqueue_workflow(Opts) ->

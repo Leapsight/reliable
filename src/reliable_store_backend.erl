@@ -1,5 +1,5 @@
 %% =============================================================================
-%%  reliable_storage_backend.erl -
+%%  reliable_store_backend.erl -
 %%
 %%  Copyright (c) 2020 Christopher Meiklejohn. All rights reserved.
 %%  Copyright (c) 2020 Leapsight Holdings Limited. All rights reserved.
@@ -17,22 +17,34 @@
 %%  limitations under the License.
 %% =============================================================================
 
--module(reliable_storage_backend).
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-module(reliable_store_backend).
+
+
+
+%% =============================================================================
+%% CALLBACKS
+%% =============================================================================
+
+
 
 
 -callback init() -> {ok, pid()} | {error, any()}.
 
 
 -callback enqueue(
-    Ref :: pid(), Bucket :: binary(), Work :: reliable_worker:work()) ->
+    Ref :: pid(), Bucket :: binary(), Work :: reliable_partition_worker:work()) ->
     ok | {error, any()}.
 
 
 -callback update(
     Ref :: pid(),
     Bucket :: binary(),
-    WorkId :: reliable_worker:work_id(),
-    NewItems :: [reliable_worker:work_item()]) -> ok | {error, any()}.
+    WorkId :: reliable_partition_worker:work_id(),
+    NewItems :: [reliable_partition_worker:work_item()]) -> ok | {error, any()}.
 
 
 -callback fold(
@@ -41,22 +53,27 @@
     Fun :: function(),
     Acc :: any(),
     Opts :: map()) ->
-    NewAcc :: any().
+    {NewAcc :: any(), Continuation :: any()}.
 
+-callback list(
+    Ref :: pid(),
+    Bucket :: binary(),
+    Opts :: map()) ->
+    List :: {[reliable_partition_worker:work()], Continuation :: any()}.
 
 -callback get(
     Ref :: pid(),
-    WorkId :: reliable_worker:work_ref()) ->
+    WorkRef :: reliable_partition_worker:work_ref()) ->
         {ok, term()} | {error, not_found | any()}.
 
 
 -callback delete(
     Ref :: pid(),
     Bucket :: binary(),
-    WorkId :: reliable_worker:work_id()) -> ok.
+    WorkId :: reliable_partition_worker:work_id()) -> ok.
 
 
 -callback delete_all(
     Ref :: pid(),
     Bucket :: binary(),
-    AllCompleted :: [reliable_worker:work_id()]) -> ok.
+    AllCompleted :: [reliable_partition_worker:work_id()]) -> ok.

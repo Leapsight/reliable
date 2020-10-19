@@ -21,11 +21,8 @@
 
 -define(APP, reliable).
 
--define(DEFAULT_BACKEND, reliable_riak_storage_backend).
+-define(DEFAULT_BACKEND, reliable_riak_store_backend).
 
-%% APP_CONFIG CALLBACKS
--export([on_set/2]).
--export([will_set/2]).
 
 %% API
 -export([init/0]).
@@ -36,7 +33,8 @@
 
 %% API
 -export([partition/1]).
--export([partitions/0]).
+-export([partition_map/0]).
+-export([all_partitions/0]).
 -export([local_partitions/0]).
 -export([number_of_partitions/0]).
 -export([instances/0]).
@@ -44,35 +42,6 @@
 -export([riak_host/0]).
 -export([riak_port/0]).
 -export([storage_backend/0]).
-
-
-
-
-
-
-%% =============================================================================
-%% APP_CONFIG CALLBACKS
-%% =============================================================================
-
-
-
-
--spec on_set(Key :: key_value:key(), Value :: any()) -> ok.
-
-on_set(number_of_partitions, _) ->
-    Partitions = gen_partitions(),
-    set(Partitions, Partitions);
-
-on_set(_, _) ->
-    ok.
-
-
--spec will_set(Key :: key_value:key(), Value :: any()) ->
-    ok | {ok, NewValue :: any()} | {error, Reason :: any()}.
-
-will_set(_Key, Value) ->
-    {ok, Value}.
-
 
 
 
@@ -190,17 +159,26 @@ number_of_partitions() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec partitions() -> [#{binary() => [binary()]}].
+-spec all_partitions() -> [binary()].
 
-partitions() ->
-    %% They are set in on_set/2
-    case app_config:get(?APP, partitions, undefined) of
+all_partitions() ->
+    lists:flatten(maps:values(partition_map())).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec partition_map() -> [#{binary() => [binary()]}].
+
+partition_map() ->
+    case app_config:get(?APP, partition_map, undefined) of
         undefined ->
-            Partitions = gen_partitions(),
-            app_config:set(?APP, partitions, Partitions),
-            Partitions;
-        Partitions ->
-            Partitions
+            Map = gen_partitions(),
+            ok = set(partition_map, Map),
+            Map;
+        Map ->
+            Map
     end.
 
 
@@ -213,12 +191,10 @@ partitions() ->
 local_partitions() ->
     case instance_name() of
         undefined ->
-            partitions();
+            partition_map();
         Name ->
-            maps:get(Name, partitions())
+            maps:get(Name, partition_map())
     end.
-
-
 
 
 %% -----------------------------------------------------------------------------
@@ -228,22 +204,10 @@ local_partitions() ->
 -spec partition(Key :: binary() | undefined) -> binary().
 
 partition(undefined) ->
-    partition(rand:uniform(maps:size(partitions())));
+    partition(rand:uniform(maps:size(partition_map())));
 
-partition(Key) when is_binary(Key) ->
-    partition(erlang:phash2(Key));
-
-partition(Hash) when is_integer(Hash) ->
-    Partitions = partitions(),
-
-    %% We choose the instance and its partitions
-    Instances = maps:keys(Partitions),
-    M = Hash rem length(Instances) + 1,
-    MPartitions = maps:get(lists:nth(M, Instances), Partitions),
-
-    %% We choose a partition
-    N = Hash rem number_of_partitions() + 1,
-    lists:nth(N, MPartitions).
+partition(Key) ->
+    do_partition(erlang:phash2(Key)).
 
 
 
@@ -252,10 +216,16 @@ partition(Hash) when is_integer(Hash) ->
 %% PRIVATE
 %% =============================================================================
 
+
+
 validate() ->
-    validate([
+    ok = validate([
         ?MODULE:get(instance_name, {error, instance_name})
-    ]).
+    ]),
+    %% We force the generation of properties
+    _  = partition_map(),
+    ok.
+
 
 
 validate([{error, Key}|_]) ->
@@ -267,6 +237,21 @@ validate([_|T]) ->
 validate([]) ->
     ok.
 
+
+%% @private
+do_partition(Hash) when is_integer(Hash) ->
+    Partitions = partition_map(),
+
+    %% We choose the instance and its partitions. We do this to ensure changes
+    %% to the number_of_partitions will not change the instance associated for
+    %% Key.
+    Instances = maps:keys(Partitions),
+    M = Hash rem length(Instances) + 1,
+    MPartitions = maps:get(lists:nth(M, Instances), Partitions),
+
+    %% We choose a partition
+    N = Hash rem number_of_partitions() + 1,
+    lists:nth(N, MPartitions).
 
 
 %% -----------------------------------------------------------------------------
@@ -301,12 +286,12 @@ gen_partitions() ->
     }),
 
     lists:foldl(
-        fun(Name, Acc) ->
+        fun(Instance, Acc) ->
             Partitions = [
-                <<Name/binary, "_partition_", (integer_to_binary(X))/binary>>
+                <<Instance/binary, "_partition_", (integer_to_binary(X))/binary>>
                 || X <- lists:seq(1, N)
             ],
-            maps:put(Name, Partitions, Acc)
+            maps:put(Instance, Partitions, Acc)
         end,
         maps:new(),
         Instances

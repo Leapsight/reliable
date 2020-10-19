@@ -61,11 +61,12 @@
 
 
 start_link() ->
-    try reliable_config:init() of
-        ok ->
+    try
+        ok = reliable_config:init(),
+        ok = add_riak_pool(),
         supervisor:start_link({local, ?MODULE}, ?MODULE, [])
     catch
-        error:Reason ->
+        _:Reason ->
             {error, Reason}
     end.
 
@@ -90,7 +91,9 @@ init([]) ->
             reliable_event_handler_watcher_sup, [], permanent, infinity
         ),
         ?EVENT_MANAGER(reliable_event_manager, permanent, 5000),
-        ?SUPERVISOR(reliable_worker_sup, [], permanent, infinity)
+        %% Start partition stores before workers
+        ?SUPERVISOR(reliable_partition_store_sup, [], permanent, infinity),
+        ?SUPERVISOR(reliable_partition_worker_sup, [], permanent, infinity)
     ],
 
     {ok, {SupFlags, ChildSpecs}}.
@@ -98,3 +101,26 @@ init([]) ->
 
 
 
+%% =============================================================================
+%% PRIVATE
+%% =============================================================================
+
+
+
+add_riak_pool() ->
+    Config = case reliable_config:get(riak_pool, undefined) of
+        undefined ->
+            Size = length(reliable_config:instances()),
+            #{
+                min_size => Size,
+                max_size => Size * 2
+            };
+        Term when is_map(Term) ->
+            Term
+    end,
+    case riak_pool:add_pool(reliable, Config) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            throw(Reason)
+    end.

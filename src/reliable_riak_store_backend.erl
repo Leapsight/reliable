@@ -1,5 +1,5 @@
 %% =============================================================================
-%%  reliable_riak_storage_backend.erl -
+%%  reliable_riak_store_backend.erl -
 %%
 %%  Copyright (c) 2020 Christopher Meiklejohn. All rights reserved.
 %%  Copyright (c) 2020 Leapsight Holdings Limited. All rights reserved.
@@ -17,8 +17,8 @@
 %%  limitations under the License.
 %% =============================================================================
 
--module(reliable_riak_storage_backend).
--behaviour(reliable_storage_backend).
+-module(reliable_riak_store_backend).
+-behaviour(reliable_store_backend).
 
 -include_lib("kernel/include/logger.hrl").
 -include_lib("riakc/include/riakc.hrl").
@@ -31,6 +31,7 @@
          delete/3,
          delete_all/3,
          update/4,
+         list/3,
          fold/5]).
 
 
@@ -46,8 +47,8 @@
 %% @end
 %% -----------------------------------------------------------------------------
 init() ->
-    Host = application:get_env(reliable, riak_host, "127.0.0.1"),
-    Port = application:get_env(reliable, riak_port, 8087),
+    Host = reliable_config:riak_host(),
+    Port = reliable_config:riak_port(),
 
     case riakc_pb_socket:start_link(Host, Port) of
         {ok, Pid} ->
@@ -61,21 +62,21 @@ init() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-enqueue(Reference, Bucket, {WorkId, WorkItems}) ->
+enqueue(Ref, Bucket, {WorkId, WorkItems}) ->
     Object = riakc_obj:new(
         Bucket,
         WorkId,
         term_to_binary(WorkItems)
     ),
-    riakc_pb_socket:put(Reference, Object).
+    riakc_pb_socket:put(Ref, Object).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-get(Reference, {work_ref, Bucket, WorkId}) ->
-    case riakc_pb_socket:get(Reference, Bucket, WorkId, []) of
+get(Ref, {work_ref, Bucket, WorkId}) ->
+    case riakc_pb_socket:get(Ref, Bucket, WorkId, []) of
         {ok, Object} ->
             BinaryData = riakc_obj:get_value(Object),
             TermData = binary_to_term(BinaryData),
@@ -94,17 +95,17 @@ get(Reference, {work_ref, Bucket, WorkId}) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-delete(Reference, Bucket, WorkId) ->
-    riakc_pb_socket:delete(Reference, Bucket, WorkId).
+delete(Ref, Bucket, WorkId) ->
+    riakc_pb_socket:delete(Ref, Bucket, WorkId).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-delete_all(Reference, Bucket, WorkIds) ->
+delete_all(Ref, Bucket, WorkIds) ->
     _ = lists:foreach(
-        fun(WorkId) -> delete(Reference, Bucket, WorkId) end,
+        fun(WorkId) -> delete(Ref, Bucket, WorkId) end,
         WorkIds
     ),
     ok.
@@ -114,11 +115,11 @@ delete_all(Reference, Bucket, WorkIds) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-update(Reference, Bucket, WorkId, WorkItems) ->
-    case riakc_pb_socket:get(Reference, Bucket, WorkId) of
+update(Ref, Bucket, WorkId, WorkItems) ->
+    case riakc_pb_socket:get(Ref, Bucket, WorkId) of
         {ok, O} ->
             O1 = riakc_obj:update_value(O, WorkItems),
-            case riakc_pb_socket:put(Reference, O1, [return_body]) of
+            case riakc_pb_socket:put(Ref, O1, [return_body]) of
                 {ok, _O2} ->
                     ok;
                 {error, Reason} ->
@@ -139,13 +140,39 @@ update(Reference, Bucket, WorkId, WorkItems) ->
 %% @end
 %% -----------------------------------------------------------------------------
 
-fold(Reference, Bucket, Function, Acc, Opts) ->
+
+-spec list(
+    Ref :: pid(),
+    Bucket :: binary(),
+    Opts :: map()) ->
+    List :: [reliable_partition_worker:work()].
+
+list(Ref, Bucket, Opts) ->
+    {L, Cont} = fold(
+        Ref, Bucket, fun(Work, Acc) -> [Work | Acc] end, [], Opts
+    ),
+    {lists:reverse(L), Cont}.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec fold(
+    Ref :: pid(),
+    Bucket :: binary(),
+    Fun :: function(),
+    Acc :: any(),
+    Opts :: map()) ->
+    {NewAcc :: any(), Continuation :: any()}.
+
+fold(Ref, Bucket, Function, Acc, Opts) ->
     ReqOpts = fold_opts(Opts),
     %% Get list of the keys in the bucket.
     %% We use the $bucket secondary index so that we can do pagination with
     %% sorting.
     Res = riakc_pb_socket:get_index_eq(
-        Reference,
+        Ref,
         Bucket,
         <<"$bucket">>,
         <<>>,
@@ -157,7 +184,7 @@ fold(Reference, Bucket, Function, Acc, Opts) ->
     ?LOG_DEBUG("Got work keys: ~p", [Keys]),
 
     FoldFun = fun(Key, Acc1) ->
-        case riakc_pb_socket:get(Reference, Bucket, Key) of
+        case riakc_pb_socket:get(Ref, Bucket, Key) of
             {ok, Object} ->
                 BinaryData = riakc_obj:get_value(Object),
                 TermData = binary_to_term(BinaryData),
@@ -166,8 +193,9 @@ fold(Reference, Bucket, Function, Acc, Opts) ->
                 Function({Key, TermData}, Acc1);
             {error, Reason} ->
                 ?LOG_ERROR(
-                    "Can't handle response from pb socket; reason=~p",
-                    [Reason]
+                    "Error while retrieving work from store; "
+                    "backend=~p, reason=~p, partition=~p, key=~p",
+                    [?MODULE, Reason, Bucket, Key]
                 ),
                 Acc1
         end

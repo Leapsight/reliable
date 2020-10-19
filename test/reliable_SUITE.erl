@@ -25,34 +25,28 @@ all() ->
     ].
 
 init_per_suite(Config) ->
-    ok = reliable_config:set(instance_name, <<"reliable-test-0">>),
-    ok = reliable_config:set(instances, [<<"reliable-test-0">>]),
+    %% Allow keylisting.
+    application:set_env(riakc, allow_listing, true),
+    application:ensure_all_started(reliable),
     meck:unload(),
     Config.
 
 end_per_suite(Config) ->
     meck:unload(),
+    %% Terminate the application.
+    application:stop(reliable),
     {save_config, Config}.
 
 
 init_per_testcase(Case, _Config) ->
     ct:pal("Beginning test case ~p", [Case]),
-
-    %% Allow keylisting.
-    application:set_env(riakc, allow_listing, true),
-
-    %% Start the application.
-    application:ensure_all_started(reliable),
-
     _Config.
+
 
 end_per_testcase(Case, _Config) ->
     ct:pal("Ending test case ~p", [Case]),
-
-    %% Terminate the application.
-    application:stop(reliable),
-
     _Config.
+
 
 basic_test(_Config) ->
     %% Enqueue a write into Riak.
@@ -76,12 +70,12 @@ index_test(_Config) ->
     Object = riakc_obj:new(<<"users">>, <<"cmeik">>, <<"something">>),
     Index = riakc_set:new(),
     Index1 = riakc_set:add_element(<<"cmeik">>, Index),
-
     Work = [
         {1, {node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]}},
         {2, {node(), riakc_pb_socket, update_type,
             [{symbolic, riakc}, {<<"sets">>, <<"users">>}, <<"users">>, riakc_set:to_op(Index1)]}}
     ],
+
     {ok, _} = reliable:enqueue(Work, #{work_id => <<"cmeik">>}),
 
     %% Sleep for 5 seconds for write to happen.

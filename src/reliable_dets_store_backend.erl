@@ -1,5 +1,5 @@
 %% =============================================================================
-%%  reliable_dets_storage_backend.erl -
+%%  reliable_dets_store_backend.erl -
 %%
 %%  Copyright (c) 2020 Christopher Meiklejohn. All rights reserved.
 %%  Copyright (c) 2016-2019 Leapsight Holdings Limited. All rights reserved.
@@ -17,7 +17,7 @@
 %%  limitations under the License.
 %% =============================================================================
 
--module(reliable_dets_storage_backend).
+-module(reliable_dets_store_backend).
 -author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
 
 -define(TABLE, reliable_backend).

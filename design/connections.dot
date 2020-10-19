@@ -1,0 +1,83 @@
+digraph G {
+    splines=true;
+    nodesep=2
+    ranksep=1
+
+    graph [fontname="BlinkMacSystemFont"]
+    node [fontname="BlinkMacSystemFont" height=1 fixedsize=true]
+    edge [fontname="BlinkMacSystemFont"]
+
+    node [shape=cylinder width=2 ]
+        partition [label="/instance_1/partition_1/"]
+        data [label="Riak KV"]
+
+    node [shape=box width=3]
+        sup [label="<<supervisor>>\nsup"]
+        worker_sup [label="<<supervisor>>\npartition_worker_sup"]
+        partition_sup [label="<<supervisor>>\npartition_store_sup"]
+        store [label="<<gen_server>>\npartition_store_1"]
+        store2 [label="<<gen_server>>\npartition_store_2"]
+        worker [label="<<gen_server>>\npartition_worker_1"]
+        conn [label="<<gen_server>>\nriakc_pb_socket"]
+        pool_conn [label="<<gen_server>>\nriakc_pb_socket"]
+
+    node [style=filled fillcolor=gray90]
+        backend [label="<<module>>\nstore_backend"]
+        backend_riak [label="<<module>>\nstore_backend_riak"]
+        reliable [label="<<module>>\nreliable"]
+
+    subgraph cluster_pool{
+        label="Pool";
+        graph[style=dashed];
+
+        pool_conn
+    }
+
+    {rank=same worker; store;}
+    {rank=same sup; reliable}
+    {rank=same store; store2}
+
+
+
+    edge [label="supervises" dir=normal color=gray style=dashed]
+        sup -> worker_sup
+        sup -> partition_sup
+        worker_sup -> worker
+        partition_sup -> store
+        partition_sup -> store2
+
+    edge [color=gray style=dashed]
+        worker -> conn [label="has"]
+        backend -> backend_riak [label="callback"]
+        backend_riak -> pool_conn [label="borrows"]
+
+
+
+    edge [label="" color=black style=normal]
+        worker:nw -> worker:w [label="work" color=red fontcolor=red]
+        worker -> store [label="list" dir=back color=red fontcolor=red]
+        worker -> store [label="delete" color=red fontcolor=red]
+        worker -> conn [label="put | delete" color=red fontcolor=red]
+        conn -> data [label="" dir=back color=red fontcolor=red]
+        conn -> data [label="" color=red fontcolor=red]
+
+        reliable -> store [label="schedule" color=blue fontcolor=blue]
+        store -> backend [label="list" dir=back color=red fontcolor=red]
+        store -> backend [label="append" color=blue fontcolor=blue]
+        store -> backend [label="delete" color=red fontcolor=red]
+        pool_conn -> partition [label="" dir=back]
+        pool_conn -> partition [label=""]
+
+
+        reliable -> store2 [label="schedule" color=blue fontcolor=blue]
+        store2 -> backend [label="append" color=blue fontcolor=blue]
+
+        backend -> backend_riak [label="list_keys | get" dir=back color=red fontcolor=red]
+        backend -> backend_riak [label="put" color=blue fontcolor=blue]
+        backend -> backend_riak [label="delete" color=red fontcolor=red]
+        backend_riak -> pool_conn [label="list_keys | get" dir=back color=red fontcolor=red]
+        backend_riak -> pool_conn [label="put" color=blue fontcolor=blue]
+        backend_riak -> pool_conn [label="delete" color=red fontcolor=red]
+
+
+}

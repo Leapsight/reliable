@@ -1,5 +1,5 @@
 %% =============================================================================
-%%  reliable_worker_sup.erl -
+%%  reliable_partition_worker_sup.erl -
 %%
 %%  Copyright (c) 2020 Christopher Meiklejohn. All rights reserved.
 %%  Copyright (c) 2020 Leapsight Holdings Limited. All rights reserved.
@@ -17,7 +17,7 @@
 %%  limitations under the License.
 %% =============================================================================
 
--module(reliable_worker_sup).
+-module(reliable_partition_worker_sup).
 -behaviour(supervisor).
 
 
@@ -38,12 +38,9 @@ start_link() ->
 
 
 
-
 %% =============================================================================
 %% SUPERVISOR CALLBACKS
 %% =============================================================================
-
-
 
 
 
@@ -54,22 +51,23 @@ init([]) ->
         period => 1
     },
 
-    %% We spawn a child per bucket. Each server is the single writer
-    %% to that bucket, the bucket acting as a queue.
+    %% We spawn a child per store partition. Each server is the single writer
+    %% to that store partition, the store partition acting as a queue.
     ChildSpecs = [
         begin
-            Name = binary_to_atom(Bucket, utf8),
+            StoreName = binary_to_atom(Bucket, utf8),
+            Name = binary_to_atom(<<Bucket/binary, "_worker">>, utf8),
             #{
                 id => Name,
                 start => {
-                    reliable_worker,
+                    reliable_partition_worker,
                     start_link,
-                    [Name, Bucket]
+                    [Name, StoreName, Bucket]
                 },
                 restart => permanent,
                 shutdown => infinity,
                 type => worker,
-                modules => [reliable_worker]
+                modules => [reliable_partition_worker]
             }
         end || Bucket <- reliable_config:local_partitions()
     ],
