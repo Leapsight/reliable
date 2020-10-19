@@ -33,7 +33,6 @@
 
 
 start(_StartType, _StartArgs) ->
-    _ = application:ensure_all_started(riak_pool),
     case reliable_sup:start_link() of
         {ok, _} = OK -> OK;
         {error, _} = Error -> Error

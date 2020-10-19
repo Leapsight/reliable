@@ -313,18 +313,28 @@ handle_call({delete, WorkIds}, _From, #state{} = State) ->
     Reply = BackendMod:delete_all(Ref, Bucket, WorkIds),
     {reply, Reply, State};
 
-handle_call(Msg, _From, State) ->
-    ?LOG_WARNING("Unhandled call; message=~p", [Msg]),
+handle_call(Msg, From, State) ->
+    ?LOG_WARNING(#{
+        reason => "Unhandled call",
+        message => Msg,
+        from => From
+    }),
     {reply, {error, not_implemented}, State}.
 
 
 handle_cast(Msg, State) ->
-    ?LOG_WARNING("Unhandled cast; message=~p", [Msg]),
+    ?LOG_WARNING(#{
+        reason => "Unhandled cast",
+        message => Msg
+    }),
     {noreply, State}.
 
 
 handle_info(Msg, State) ->
-    ?LOG_WARNING("Unhandled info; message=~p", [Msg]),
+    ?LOG_WARNING(#{
+        reason => "Unhandled info",
+        message => Msg
+    }),
     {noreply, State}.
 
 terminate(_Reason, _State) ->
@@ -346,7 +356,11 @@ code_change(_OldVsn, State, _Extra) ->
 do_enqueue(BackendMod, Ref, Bucket, {WorkId, _} = Work) ->
     %% TODO: Deduplicate here.
     %% TODO: Replay once completed.
-    ?LOG_INFO("Enqueuing work: ~p, instance: ~p", [Work, Bucket]),
+    ?LOG_INFO(#{
+        message => "Enqueuing work",
+        work_id => WorkId,
+        instance => Bucket
+    }),
 
     case BackendMod:enqueue(Ref, Bucket, Work) of
         ok ->

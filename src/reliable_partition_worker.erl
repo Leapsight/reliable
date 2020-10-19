@@ -112,13 +112,20 @@ handle_continue(schedule_work, State0) ->
     {noreply, State1}.
 
 
-handle_call(Msg, _From, State) ->
-    ?LOG_WARNING("Unhandled call; message=~p", [Msg]),
+handle_call(Msg, From, State) ->
+    ?LOG_WARNING(#{
+        reason => "Unhandled call",
+        message => Msg,
+        from => From
+    }),
     {reply, {error, not_implemented}, State}.
 
 
 handle_cast(Msg, State) ->
-    ?LOG_WARNING("Unhandled cast; message=~p", [Msg]),
+    ?LOG_WARNING(#{
+        reason => "Unhandled cast",
+        message => Msg
+    }),
     {noreply, State}.
 
 
@@ -135,7 +142,10 @@ handle_info(
     end;
 
 handle_info(Msg, State) ->
-   ?LOG_WARNING("Unhandled info; message=~p", [Msg]),
+    ?LOG_WARNING(#{
+        reason => "Unhandled info",
+        message => Msg
+    }),
     {noreply, State}.
 
 
@@ -162,7 +172,10 @@ get_db_connection() ->
 
     {ok, Conn} = riakc_pb_socket:start_link(Host, Port),
     pong = riakc_pb_socket:ping(Conn),
-    ?LOG_DEBUG("Got connection to Riak: ~p", [Conn]),
+    ?LOG_DEBUG(#{
+        message => "Got connection to Riak",
+        pid => Conn
+    }),
     Conn.
 
 
@@ -197,7 +210,7 @@ schedule_work(fail, #state{fetch_backoff = B0} = State) ->
 
 %% @private
 process_work(State) ->
-    ?LOG_INFO("Fetching work."),
+    ?LOG_DEBUG(#{message => "Fetching work."}),
     StoreName = State#state.store_name,
     Bucket = State#state.bucket,
     %% Iterate through work that needs to be done.
@@ -215,7 +228,10 @@ process_work(State) ->
     {WorkList, _Cont} = reliable_partition_store:list(StoreName, Opts),
     {Completed, State} = lists:foldl(fun process_work/2, {[], State}, WorkList),
 
-    ?LOG_DEBUG("Attempting to delete completed work: ~p", [Completed]),
+    ?LOG_DEBUG(#{
+        message => "Attempting to delete completed work",
+        work_ids => Completed
+    }),
 
     %% Delete items outside of iterator to ensure delete is safe.
     _ = lists:foreach(
@@ -233,7 +249,10 @@ process_work(State) ->
 
 %% @private
 process_work({WorkId, Items}, {Acc, State}) ->
-    ?LOG_DEBUG("Found work to be performed: ~p", [WorkId]),
+    ?LOG_DEBUG(#{
+        message => "Found work to be performed",
+        work_id => WorkId
+    }),
 
     %% Only remove the work when all of the work items are done.
     ItemAcc = {true, [], WorkId, Items, State},
@@ -241,10 +260,16 @@ process_work({WorkId, Items}, {Acc, State}) ->
         {true, _, _, _, _} ->
             %% We made it through the entire list with a result for
             %% everything, remove.
-            ?LOG_DEBUG("work ~p completed!", [WorkId]),
+            ?LOG_DEBUG(#{
+                message => "Work completed",
+                work_id => WorkId
+            }),
             {Acc ++ [WorkId], State};
         {false, _, _, _, _} ->
-            ?LOG_DEBUG("work ~p NOT YET completed!", [WorkId]),
+            ?LOG_DEBUG(#{
+                message => "Work NOT YET completed",
+                work_id => WorkId
+            }),
             {Acc, State}
     end.
 
@@ -252,13 +277,20 @@ process_work({WorkId, Items}, {Acc, State}) ->
 %% @private
 process_work_items(LastItem, {false, Completed, WorkId, Items, State}) ->
     %% Don't iterate if the last item wasn't completed.
-    ?LOG_INFO("Not attempting next item, since last failed."),
+    ?LOG_INFO(#{
+        message => "Not attempting next item, since last failed.",
+        work_id => WorkId
+    }),
     {false, Completed ++ [LastItem], WorkId, Items, State};
 
 process_work_items(
     {ItemId, Item, undefined} = LastItem,
     {true, Completed, WorkId, Items, State}) ->
-    ?LOG_INFO("Found work item to be performed: ~p", [Item]),
+    ?LOG_DEBUG(#{
+        message => "Found work item to be performed.",
+        item_id => ItemId,
+        work_id => WorkId
+    }),
     %% Destructure work to be performed.
     Symbolics = State#state.symbolics,
     StoreName = State#state.store_name,
@@ -282,15 +314,21 @@ process_work_items(
             end
         end, Args0),
 
-        ?LOG_DEBUG(
-            "Trying to perform work; node=~p, module=~p, "
-            "function=~p, args=~p",
-            [Node, Module, Function, Args]
-        ),
+        ?LOG_DEBUG(#{
+            message => "Trying to perform work",
+            node => Node,
+            module => Module,
+            function => Function,
+            arguments => Args
+        }),
 
         Result = rpc:call(Node, Module, Function, Args),
 
-        ?LOG_DEBUG("Got result: ~p", [Result]),
+
+        ?LOG_DEBUG(#{
+            message => "Work result",
+            result => Result
+        }),
 
         %% Update item.
         NewItems = lists:keyreplace(ItemId, 1, Items, {ItemId, Item, Result}),
@@ -298,21 +336,28 @@ process_work_items(
 
         case Result of
             ok ->
-                ?LOG_DEBUG("Updated item."),
+                ?LOG_DEBUG(#{message => "Updated work", work_id => WorkId}),
                 {true, Completed ++ [LastItem], WorkId, Items, State};
             {error, Reason} ->
-                ?LOG_DEBUG("Writing failed: ~p", [Reason]),
+                ?LOG_DEBUG(#{
+                    message => "Writing failed",
+                    work_id => WorkId,
+                    reason => Reason
+                }),
                 {false, Completed ++ [LastItem], WorkId, Items, State}
         end
     catch
-        _:Error ->
-            ?LOG_ERROR("Got exception: ~p", [Error]),
+        _:EReason ->
+            ?LOG_ERROR(#{message => "Got exception", reason => EReason}),
             {false, Completed ++ [LastItem], WorkId, Items, State}
     end;
 
 process_work_items(
-    {_, Item, _} = LastItem, {true, Completed, WorkId, Items, State}) ->
-    ?LOG_INFO("Found work item to be performed: ~p", [Item]),
-    ?LOG_DEBUG("Work already performed, advancing to next item."),
+    {ItemId, _, _} = LastItem, {true, Completed, WorkId, Items, State}) ->
+    ?LOG_DEBUG(#{
+        message => "Found work item to be performed",
+        work_id => WorkId,
+        item => ItemId
+    }),
     {true, Completed ++ [LastItem], WorkId, Items, State}.
 

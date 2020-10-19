@@ -13,8 +13,8 @@
         app_config,
         gproc,
         backoff,
-        riak_pool,
-        riakc
+        riakc,
+        riak_pool
     ]},
     {env,[]},
     {modules, []},
