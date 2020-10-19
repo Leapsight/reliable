@@ -28,7 +28,7 @@
   1},
  {<<"riak_pool">>,
   {git,"https://gitlab.com/leapsight/riak_pool.git",
-       {ref,"7eff16d80a311f123943fd8534a81aa81e6c7b43"}},
+       {ref,"b846a08a784d2f838ac55ac749778f358966350e"}},
   0},
  {<<"riakc">>,
   {git,"git://github.com/basho/riak-erlang-client.git",
