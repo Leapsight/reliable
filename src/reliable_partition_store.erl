@@ -194,7 +194,7 @@ update(Name, Work, Timeout) ->
     ok | {error, any()}.
 
 delete(Name, WorkId) ->
-    delete(Name, WorkId).
+    delete(Name, WorkId, 30000).
 
 
 %% -----------------------------------------------------------------------------
