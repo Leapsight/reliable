@@ -181,12 +181,17 @@ get_db_connection() ->
 
 %% @private
 schedule_work(State) ->
-    Floor = 1000,
-    Ceiling = 60000,
+    Floor = reliable_config:get(pull_backoff_min, 2000),
+    Ceiling = reliable_config:get(pull_backoff_max, 60000),
     B = backoff:type(
         backoff:init(Floor, Ceiling, self(), fetch_work),
         jitter
     ),
+    ?LOG_DEBUG(#{
+        pid => self(),
+        message => "Fetch work scheduled",
+        delay => backoff:get(B)
+    }),
     State#state{
         fetch_backoff = B,
         fetch_timer_ref = backoff:fire(B)
@@ -195,6 +200,11 @@ schedule_work(State) ->
 
 schedule_work(succeed, #state{fetch_backoff = B0} = State) ->
     {_, B1} = backoff:succeed(B0),
+    ?LOG_DEBUG(#{
+        pid => self(),
+        message => "Fetch work scheduled",
+        delay => backoff:get(B1)
+    }),
     State#state{
         fetch_backoff = B1,
         fetch_timer_ref = backoff:fire(B1)
@@ -202,6 +212,11 @@ schedule_work(succeed, #state{fetch_backoff = B0} = State) ->
 
 schedule_work(fail, #state{fetch_backoff = B0} = State) ->
     {_, B1} = backoff:fail(B0),
+    ?LOG_DEBUG(#{
+        pid => self(),
+        message => "Fetch work scheduled",
+        delay => backoff:get(B1)
+    }),
     State#state{
         fetch_backoff = B1,
         fetch_timer_ref = backoff:fire(B1)
@@ -210,9 +225,16 @@ schedule_work(fail, #state{fetch_backoff = B0} = State) ->
 
 %% @private
 process_work(State) ->
-    ?LOG_DEBUG(#{message => "Fetching work."}),
+
     StoreName = State#state.store_name,
     Bucket = State#state.bucket,
+
+    ?LOG_DEBUG(#{
+        message => "Fetching work.",
+        pid => self(),
+        partition => Bucket
+    }),
+
     %% Iterate through work that needs to be done.
     %%
     %% Probably inserting when holding the iterator is a problem too?
@@ -229,20 +251,26 @@ process_work(State) ->
     {Completed, State} = lists:foldl(fun process_work/2, {[], State}, WorkList),
 
     ?LOG_DEBUG(#{
-        message => "Attempting to delete completed work",
+        pid => self(),
+        message => "Completed work",
         work_ids => Completed
     }),
 
     %% Delete items outside of iterator to ensure delete is safe.
-    _ = lists:foreach(
-        fun(WorkId) ->
-            ok = reliable_partition_store:delete(StoreName, WorkId),
-            %% Notify subscribers
-            WorkRef = {work_ref, Bucket, WorkId},
-            ok = reliable_event_manager:notify({reliable, completed, WorkRef})
-        end,
-        Completed
-    ),
+    %% _ = lists:foreach(
+    %%     fun(WorkId) ->
+    %%         ok = reliable_partition_store:delete(StoreName, WorkId),
+    %%         ?LOG_DEBUG(#{
+    %%             pid => self(),
+    %%             message => "Deleted completed work",
+    %%             work_id => WorkId
+    %%         }),
+    %%         %% Notify subscribers
+    %%         WorkRef = {work_ref, Bucket, WorkId},
+    %%         ok = reliable_event_manager:notify({reliable, completed, WorkRef})
+    %%     end,
+    %%     Completed
+    %% ),
 
     ok.
 
@@ -250,6 +278,7 @@ process_work(State) ->
 %% @private
 process_work({WorkId, Items}, {Acc, State}) ->
     ?LOG_DEBUG(#{
+        pid => self(),
         message => "Found work to be performed",
         work_id => WorkId
     }),
@@ -260,10 +289,19 @@ process_work({WorkId, Items}, {Acc, State}) ->
         {true, _, _, _, _} ->
             %% We made it through the entire list with a result for
             %% everything, remove.
+            StoreName = State#state.store_name,
+            Bucket = State#state.bucket,
+
             ?LOG_DEBUG(#{
-                message => "Work completed",
-                work_id => WorkId
+                pid => self(),
+                message => "Work completed, attempting delete from store",
+                work_id => WorkId,
+                partition => Bucket
             }),
+
+            ok = reliable_partition_store:delete(StoreName, WorkId),
+            WorkRef = {work_ref, Bucket, WorkId},
+            ok = reliable_event_manager:notify({reliable, completed, WorkRef}),
             {Acc ++ [WorkId], State};
         {false, _, _, _, _} ->
             ?LOG_DEBUG(#{
@@ -318,8 +356,7 @@ process_work_items(
             message => "Trying to perform work",
             node => Node,
             module => Module,
-            function => Function,
-            arguments => Args
+            function => Function
         }),
 
         Result = rpc:call(Node, Module, Function, Args),
