@@ -149,7 +149,7 @@ instance_name() ->
 %% @doc The number of partitions per instance
 %% @end
 %% -----------------------------------------------------------------------------
--spec number_of_partitions() -> [binary()].
+-spec number_of_partitions() -> integer().
 
 number_of_partitions() ->
     app_config:get(?APP, number_of_partitions, 3).
@@ -169,7 +169,7 @@ all_partitions() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec partition_map() -> [#{binary() => [binary()]}].
+-spec partition_map() -> #{binary() => [binary()]}.
 
 partition_map() ->
     case app_config:get(?APP, partition_map, undefined) of
@@ -189,7 +189,7 @@ partition_map() ->
 -spec local_partitions() -> [binary()].
 
 local_partitions() ->
-    case instance_name() of
+    case ?MODULE:get(instance_name, undefined) of
         undefined ->
             partition_map();
         Name ->
@@ -204,7 +204,7 @@ local_partitions() ->
 -spec partition(Key :: binary() | undefined) -> binary().
 
 partition(undefined) ->
-    partition(rand:uniform(maps:size(partition_map())));
+    do_partition(rand:uniform(maps:size(partition_map())));
 
 partition(Key) ->
     do_partition(erlang:phash2(Key)).
@@ -274,6 +274,8 @@ do_partition(Hash) when is_integer(Hash) ->
 %% '''
 %% @end
 %% -----------------------------------------------------------------------------
+-spec gen_partitions() -> #{binary() => [binary()]}.
+
 gen_partitions() ->
     Instances = instances(),
     N = number_of_partitions(),
