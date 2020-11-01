@@ -8,7 +8,7 @@ digraph G {
     edge [fontname="BlinkMacSystemFont"]
 
     node [shape=cylinder width=2 ]
-        partition [label="/instance_1/partition_1/"]
+        partition [label="Riak KV"]
         data [label="Riak KV"]
 
     node [shape=box width=3]
@@ -34,6 +34,7 @@ digraph G {
     }
 
     {rank=same worker; store;}
+    {rank=same partition; data;}
     {rank=same sup; reliable}
     {rank=same store; store2}
 
@@ -61,7 +62,10 @@ digraph G {
         conn -> data [label="" dir=back color=red fontcolor=red]
         conn -> data [label="" color=red fontcolor=red]
 
+
+
         reliable -> store [label="schedule" color=blue fontcolor=blue]
+
         store -> backend [label="list" dir=back color=red fontcolor=red]
         store -> backend [label="append" color=blue fontcolor=blue]
         store -> backend [label="delete" color=red fontcolor=red]
@@ -69,8 +73,7 @@ digraph G {
         pool_conn -> partition [label=""]
 
 
-        reliable -> store2 [label="schedule" color=blue fontcolor=blue]
-        store2 -> backend [label="append" color=blue fontcolor=blue]
+        store2 -> backend [label="append" color=gray fontcolor=gray]
 
         backend -> backend_riak [label="list_keys | get" dir=back color=red fontcolor=red]
         backend -> backend_riak [label="put" color=blue fontcolor=blue]

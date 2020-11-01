@@ -24,17 +24,18 @@
 -include_lib("riakc/include/riakc.hrl").
 
 -author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
+-author("Alejandro Ramallo <alejandro.ramallo@leapsight.com>").
 
 -define(POOLNAME, reliable).
 
--export([init/0,
-         enqueue/3,
-         get/2,
-         delete/3,
-         delete_all/3,
-         update/4,
-         list/3,
-         fold/5]).
+-export([init/0]).
+-export([enqueue/3]).
+-export([get/2]).
+-export([delete/3]).
+-export([delete_all/3]).
+-export([update/4]).
+-export([list/3]).
+-export([fold/5]).
 
 
 
@@ -54,11 +55,11 @@ init() ->
             ok = riak_pool:checkin(?POOLNAME, Pid, ok),
             {ok, ?POOLNAME};
         {error, Reason} = Error ->
-            ?LOG_INFO(
-                "Error while getting db connection from pool during init, will try allocation a connection directly;"
-                "poolname=~p, reason=~p",
-                [reliable, Reason]
-            ),
+            ?LOG_INFO(#{
+                message => "Error while getting db connection from pool.",
+                poolname => reliable,
+                reason => Reason
+            }),
             Error
     end.
 
@@ -67,17 +68,22 @@ init() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+-spec enqueue(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    Work :: reliable_work:t()) -> ok | {error, any()}.
 
-enqueue(Ref, Bucket, {WorkId, WorkItems}) ->
+enqueue(Ref, Bucket, Work) ->
+    WorkId = reliable_work:id(Work),
+    Tasks =  reliable_work:tasks(Work),
+
     Fun = fun(Pid) ->
-        Object = riakc_obj:new(
-            Bucket,
-            WorkId,
-            term_to_binary(WorkItems)
-        ),
+        Object = riakc_obj:new(Bucket, WorkId, term_to_binary(Tasks)),
         riakc_pb_socket:put(Pid, Object)
     end,
+
     PoolOpts = #{timeout => 10000},
+
     case riak_pool:execute(Ref, Fun, PoolOpts) of
         {true, ok} ->
             ok;
@@ -91,36 +97,39 @@ enqueue(Ref, Bucket, {WorkId, WorkItems}) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-get(Ref, {work_ref, Bucket, WorkId}) ->
-    Fun = fun(Pid) ->
-        case riakc_pb_socket:get(Pid, Bucket, WorkId, []) of
-            {ok, Object} ->
-                BinaryData = riakc_obj:get_value(Object),
-                TermData = binary_to_term(BinaryData),
-                {ok, TermData};
-            {error, notfound} ->
-                {error, not_found};
-            {error, _} = Error ->
-                Error
-        end
-    end,
-    PoolOpts = #{timeout => 10000},
-    case riak_pool:execute(Ref, Fun, PoolOpts) of
-        {true, Res} ->
-            Res;
-        {false, Reason} ->
-            {error, Reason}
+-spec get(
+    Ref :: reliable_store_backend:ref(), WorkRef :: reliable_work_ref:t()) ->
+    {ok, reliable_work:t()} | {error, not_found | any()}.
+
+get(Ref, WorkRef) ->
+    case reliable_work_ref:is_type(WorkRef) of
+        true ->
+            WorkId = reliable_work_ref:work_id(WorkRef),
+            Bucket = reliable_work_ref:instance(WorkRef),
+
+            Fun = fun(Pid) -> get_work(Pid, Bucket, WorkId, []) end,
+            PoolOpts = #{timeout => 10000},
+
+            case riak_pool:execute(Ref, Fun, PoolOpts) of
+                {true, Res} ->
+                    Res;
+                {false, Reason} ->
+                    {error, Reason}
+            end;
+        false ->
+            {error, {badarg, WorkRef}}
     end.
-
-
-
-
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+-spec delete(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    WorkId :: reliable_work:id()) -> ok.
+
 delete(Ref, Bucket, WorkId) when is_pid(Ref) ->
     riakc_pb_socket:delete(Ref, Bucket, WorkId);
 
@@ -128,7 +137,9 @@ delete(Ref, Bucket, WorkId) ->
     Fun = fun(Pid) ->
         riakc_pb_socket:delete(Pid, Bucket, WorkId)
     end,
+
     PoolOpts = #{timeout => 10000},
+
     case riak_pool:execute(Ref, Fun, PoolOpts) of
         {true, Res} ->
             Res;
@@ -142,6 +153,11 @@ delete(Ref, Bucket, WorkId) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+-spec delete_all(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    AllCompleted :: [reliable_work:id()]) -> ok.
+
 delete_all(Ref, Bucket, WorkIds) ->
     Fun = fun(Pid) ->
         _ = lists:foreach(
@@ -150,7 +166,9 @@ delete_all(Ref, Bucket, WorkIds) ->
         ),
         ok
     end,
+
     PoolOpts = #{timeout => 10000},
+
     case riak_pool:execute(Ref, Fun, PoolOpts) of
         {true, Res} ->
             Res;
@@ -163,13 +181,19 @@ delete_all(Ref, Bucket, WorkIds) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+-spec update(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    WorkId :: reliable_work:id(),
+    NewItems :: [reliable:task()]) -> ok | {error, any()}.
+
 update(Ref, Bucket, WorkId, WorkItems) ->
     Fun = fun(Pid) ->
         case riakc_pb_socket:get(Pid, Bucket, WorkId) of
-            {ok, O} ->
-                O1 = riakc_obj:update_value(O, WorkItems),
-                case riakc_pb_socket:put(Pid, O1, [return_body]) of
-                    {ok, _O2} ->
+            {ok, Obj0} ->
+                Obj1 = riakc_obj:update_value(Obj0, WorkItems),
+                case riakc_pb_socket:put(Pid, Obj1, [return_body]) of
+                    {ok, _Obj2} ->
                         ok;
                     {error, Reason} ->
                         ?LOG_ERROR("failed to update object: ~p", [Reason]),
@@ -183,7 +207,9 @@ update(Ref, Bucket, WorkId, WorkItems) ->
                 {error, Reason}
         end
     end,
+
     PoolOpts = #{timeout => 10000},
+
     case riak_pool:execute(Ref, Fun, PoolOpts) of
         {true, Res} ->
             Res;
@@ -201,10 +227,10 @@ update(Ref, Bucket, WorkId, WorkItems) ->
 
 
 -spec list(
-    Ref :: pid(),
+    Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: [reliable_partition_worker:work()].
+    List :: {[reliable_work:t()], Continuation :: any()}.
 
 list(Ref, Bucket, Opts) ->
     {L, Cont} = fold(
@@ -218,7 +244,7 @@ list(Ref, Bucket, Opts) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec fold(
-    Ref :: pid(),
+    Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
     Fun :: function(),
     Acc :: any(),
@@ -244,13 +270,11 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
         ?LOG_DEBUG("Got work keys: ~p", [Keys]),
 
         FoldFun = fun(Key, Acc1) ->
-            case riakc_pb_socket:get(Pid, Bucket, Key) of
-                {ok, Object} ->
-                    BinaryData = riakc_obj:get_value(Object),
-                    TermData = binary_to_term(BinaryData),
+            case get_work(Pid, Bucket, Key, []) of
+                {ok, Work} ->
                     ?LOG_DEBUG("got key: ~p", [Key]),
-                    ?LOG_DEBUG("got term data: ~p", [TermData]),
-                    Function({Key, TermData}, Acc1);
+                    ?LOG_DEBUG("got work: ~p", [Work]),
+                    Function({Key, Work}, Acc1);
                 {error, Reason} ->
                     ?LOG_ERROR(
                         "Error while retrieving work from store; "
@@ -263,7 +287,9 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
         Result = lists:foldl(FoldFun, Acc, Keys),
         {Result, Cont1}
     end,
+
     PoolOpts = #{timeout => 10000},
+
     case riak_pool:execute(Ref, Fun, PoolOpts) of
         {true, Res} ->
             Res;
@@ -293,7 +319,9 @@ fold_opts(Opts0) ->
         pagination_sort => true,
         timeout => 30000
     },
+
     Opts1 = maps:merge(Default, Opts0),
+
     case maps:get(continuation, Opts1, undefined) of
         undefined ->
             maps:to_list(Opts1);
@@ -306,3 +334,36 @@ fold_opts(Opts0) ->
 maybe_error({ok, Result}) -> Result;
 maybe_error({error, "overload"}) -> error(overload);
 maybe_error({error, Reason}) -> error(Reason).
+
+
+%% @private
+get_work(Ref, Bucket, WorkId, RiakOpts) ->
+    case riakc_pb_socket:get(Ref, Bucket, WorkId, RiakOpts) of
+        {ok, Object} ->
+            Data = riakc_obj:get_value(Object),
+            safe_decode_work(Ref, Bucket, WorkId, Data);
+        {error, notfound} ->
+            {error, not_found};
+        {error, _} = Error ->
+            Error
+    end.
+
+
+%% @private
+safe_decode_work(Ref, Bucket, WorkId, Data) ->
+    Term = binary_to_term(Data),
+    case reliable_work:is_type(Term) of
+        true ->
+            {ok, Term};
+        false ->
+            ?LOG_ERROR(#{
+                message =>
+                    "Found invalid work term in store. "
+                    "Work will be deleted.",
+                bucket => bucket,
+                work_id => WorkId,
+                term => Term
+            }),
+            ok = delete(Ref, Bucket, WorkId),
+            {error, invalid_term}
+    end.

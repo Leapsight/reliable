@@ -24,6 +24,11 @@
 -module(reliable_store_backend).
 
 
+-type ref()        ::   pid() | reference() | atom().
+
+-export_type([ref/0]).
+
+
 
 %% =============================================================================
 %% CALLBACKS
@@ -31,24 +36,25 @@
 
 
 
-
--callback init() -> {ok, pid()} | {error, any()}.
+-callback init() -> {ok, ref()} | {error, any()}.
 
 
 -callback enqueue(
-    Ref :: pid(), Bucket :: binary(), Work :: reliable_partition_worker:work()) ->
+    Ref :: ref(),
+    Bucket :: binary(),
+    Work :: reliable_work:t()) ->
     ok | {error, any()}.
 
 
 -callback update(
-    Ref :: pid(),
+    Ref :: ref(),
     Bucket :: binary(),
-    WorkId :: reliable_partition_worker:work_id(),
-    NewItems :: [reliable_partition_worker:work_item()]) -> ok | {error, any()}.
+    WorkId :: reliable_work:id(),
+    NewItems :: [reliable:task()]) -> ok | {error, any()}.
 
 
 -callback fold(
-    Ref :: pid(),
+    Ref :: ref(),
     Bucket :: binary(),
     Fun :: function(),
     Acc :: any(),
@@ -56,24 +62,22 @@
     {NewAcc :: any(), Continuation :: any()}.
 
 -callback list(
-    Ref :: pid(),
+    Ref :: ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: {[reliable_partition_worker:work()], Continuation :: any()}.
+    List :: {[reliable_work:t()], Continuation :: any()}.
 
--callback get(
-    Ref :: pid(),
-    WorkRef :: reliable_partition_worker:work_ref()) ->
-        {ok, term()} | {error, not_found | any()}.
+-callback get(Ref :: ref(), WorkRef :: reliable_work_ref:t()) ->
+    {ok, term()} | {error, not_found | any()}.
 
 
 -callback delete(
-    Ref :: pid(),
+    Ref :: ref(),
     Bucket :: binary(),
-    WorkId :: reliable_partition_worker:work_id()) -> ok.
+    WorkId :: reliable_work:id()) -> ok.
 
 
 -callback delete_all(
-    Ref :: pid(),
+    Ref :: ref(),
     Bucket :: binary(),
-    AllCompleted :: [reliable_partition_worker:work_id()]) -> ok.
+    AllCompleted :: [reliable_work:id()]) -> ok.

@@ -28,34 +28,9 @@
     store_name              ::  atom(),
     bucket                  ::  binary(),
     symbolics               ::  dict:dict(),
-    fetch_backoff           ::  backoff:backoff(),
+    fetch_backoff           ::  backoff:backoff() | undefined,
     fetch_timer_ref         ::  reference() | undefined
 }).
-
-%% should be some sort of unique term identifier.
--type work_id() :: binary().
-
-%% MFA, and a node to actually execute the RPC at.
--type work_item() :: {node(), module(), function(), [term()]}.
-
-%% the result of any work performed.
--type work_item_result() :: term().
-
-%% identifier for the work item.
--type work_item_id() :: integer().
-
-
--type work_ref()    ::  {
-    work_ref,
-    Instance :: binary(),
-    WorkId :: work_id()
-}.
-
--export_type([work_ref/0]).
--export_type([work_id/0]).
--export_type([work_item_id/0]).
--export_type([work_item_result/0]).
--export_type([work_item/0]).
 
 
 %% API
@@ -256,27 +231,13 @@ process_work(State) ->
         work_ids => Completed
     }),
 
-    %% Delete items outside of iterator to ensure delete is safe.
-    %% _ = lists:foreach(
-    %%     fun(WorkId) ->
-    %%         ok = reliable_partition_store:delete(StoreName, WorkId),
-    %%         ?LOG_DEBUG(#{
-    %%             pid => self(),
-    %%             message => "Deleted completed work",
-    %%             work_id => WorkId
-    %%         }),
-    %%         %% Notify subscribers
-    %%         WorkRef = {work_ref, Bucket, WorkId},
-    %%         ok = reliable_event_manager:notify({reliable, completed, WorkRef})
-    %%     end,
-    %%     Completed
-    %% ),
-
     ok.
 
 
 %% @private
-process_work({WorkId, Items}, {Acc, State}) ->
+process_work(Work, {Acc, State}) ->
+    WorkId = reliable_work:id(Work),
+    Tasks = reliable_work:tasks(Work),
     ?LOG_DEBUG(#{
         pid => self(),
         message => "Found work to be performed",
@@ -284,8 +245,8 @@ process_work({WorkId, Items}, {Acc, State}) ->
     }),
 
     %% Only remove the work when all of the work items are done.
-    ItemAcc = {true, [], WorkId, Items, State},
-    case lists:foldl(fun process_work_items/2, ItemAcc, Items) of
+    ItemAcc = {true, [], WorkId, Tasks, State},
+    case lists:foldl(fun process_tasks/2, ItemAcc, Tasks) of
         {true, _, _, _, _} ->
             %% We made it through the entire list with a result for
             %% everything, remove.
@@ -300,7 +261,7 @@ process_work({WorkId, Items}, {Acc, State}) ->
             }),
 
             ok = reliable_partition_store:delete(StoreName, WorkId),
-            WorkRef = {work_ref, Bucket, WorkId},
+            WorkRef = reliable_work:ref(Bucket, Work),
             ok = reliable_event_manager:notify({reliable, completed, WorkRef}),
             {Acc ++ [WorkId], State};
         {false, _, _, _, _} ->
@@ -313,35 +274,91 @@ process_work({WorkId, Items}, {Acc, State}) ->
 
 
 %% @private
-process_work_items(LastItem, {false, Completed, WorkId, Items, State}) ->
+process_tasks(Last, {false, Completed, WorkId, Tasks, State}) ->
     %% Don't iterate if the last item wasn't completed.
     ?LOG_INFO(#{
         message => "Not attempting next item, since last failed.",
         work_id => WorkId
     }),
-    {false, Completed ++ [LastItem], WorkId, Items, State};
+    {false, Completed ++ [Last], WorkId, Tasks, State};
 
-process_work_items(
-    {ItemId, Item, undefined} = LastItem,
-    {true, Completed, WorkId, Items, State}) ->
+process_tasks(
+    {TaskId, Task0} = Last, {true, Completed, WorkId, Tasks, State}) ->
     ?LOG_DEBUG(#{
-        message => "Found work item to be performed.",
-        item_id => ItemId,
-        work_id => WorkId
+        message => "Found task to be performed.",
+        work_id => WorkId,
+        task_id => TaskId,
+        task => Task0
     }),
+
+    case reliable_task:result(Task0) of
+        undefined ->
+            {Bool, NewTasks} = do_process_task(
+                {TaskId, Task0}, Tasks, WorkId, State
+            ),
+            {Bool, Completed ++ [Last], WorkId, NewTasks, State};
+        _ ->
+            {true, Completed ++ [Last], WorkId, Tasks, State}
+    end.
+
+
+do_process_task({TaskId, Task0}, Tasks, WorkId, State) ->
     %% Destructure work to be performed.
-    Symbolics = State#state.symbolics,
     StoreName = State#state.store_name,
 
-    {Node, Module, Function, Args0} = Item,
-
-    %% Attempt to perform work.
+    %% Attempt to perform task.
     try
-        %% Replace symbolic terms in the work item.
-        Args = lists:map(fun(Arg) ->
+        Node = reliable_task:node(Task0),
+        Module = reliable_task:module(Task0),
+        Function = reliable_task:function(Task0),
+        Args = replace_symbolics(reliable_task:args(Task0), State),
+
+        ?LOG_DEBUG(#{
+            message => "Trying to perform task",
+            task => Task0
+        }),
+
+        Result = rpc:call(Node, Module, Function, Args),
+        Task1 = reliable_task:set_result(Result, Task0),
+
+        ?LOG_DEBUG(#{
+            message => "Task result",
+            work_id => WorkId,
+            task_id => TaskId,
+            result => Result
+        }),
+
+        %% Update task
+        NewTasks = lists:keyreplace(TaskId, 1, Tasks, Task1),
+        NewWork = reliable_work:new(WorkId, NewTasks),
+        Result = reliable_partition_store:update(StoreName, NewWork),
+
+        case Result of
+            ok ->
+                ?LOG_DEBUG(#{message => "Updated work", work_id => WorkId}),
+                {true, NewTasks};
+            {error, Reason} ->
+                ?LOG_DEBUG(#{
+                    message => "Writing failed",
+                    work_id => WorkId,
+                    reason => Reason
+                }),
+                {false, Tasks}
+        end
+    catch
+        _:EReason ->
+            ?LOG_ERROR(#{message => "Got exception", reason => EReason}),
+            {false, Tasks}
+    end.
+
+
+%% @private
+replace_symbolics(Args, State) ->
+    lists:map(
+        fun(Arg) ->
             case Arg of
                 {symbolic, Symbolic} ->
-                    case dict:find(Symbolic, Symbolics) of
+                    case dict:find(Symbolic, State#state.symbolics) of
                         error ->
                             Arg;
                         {ok, Value} ->
@@ -350,51 +367,6 @@ process_work_items(
                 _ ->
                     Arg
             end
-        end, Args0),
-
-        ?LOG_DEBUG(#{
-            message => "Trying to perform work",
-            node => Node,
-            module => Module,
-            function => Function
-        }),
-
-        Result = rpc:call(Node, Module, Function, Args),
-
-
-        ?LOG_DEBUG(#{
-            message => "Work result",
-            result => Result
-        }),
-
-        %% Update item.
-        NewItems = lists:keyreplace(ItemId, 1, Items, {ItemId, Item, Result}),
-        Result = reliable_partition_store:update(StoreName, {WorkId, NewItems}),
-
-        case Result of
-            ok ->
-                ?LOG_DEBUG(#{message => "Updated work", work_id => WorkId}),
-                {true, Completed ++ [LastItem], WorkId, Items, State};
-            {error, Reason} ->
-                ?LOG_DEBUG(#{
-                    message => "Writing failed",
-                    work_id => WorkId,
-                    reason => Reason
-                }),
-                {false, Completed ++ [LastItem], WorkId, Items, State}
-        end
-    catch
-        _:EReason ->
-            ?LOG_ERROR(#{message => "Got exception", reason => EReason}),
-            {false, Completed ++ [LastItem], WorkId, Items, State}
-    end;
-
-process_work_items(
-    {ItemId, _, _} = LastItem, {true, Completed, WorkId, Items, State}) ->
-    ?LOG_DEBUG(#{
-        message => "Found work item to be performed",
-        work_id => WorkId,
-        item => ItemId
-    }),
-    {true, Completed ++ [LastItem], WorkId, Items, State}.
-
+        end,
+        Args
+    ).

@@ -33,46 +33,37 @@
 -author("Christopher Meiklejohn <christopher.meiklejohn@gmail.com>").
 -author("Alejandro Ramallo <alejandro.ramallo@leapsight.com>").
 
-
 -define(WORKFLOW_ID, reliable_workflow_id).
 -define(WORKFLOW_LEVEL, reliable_workflow_level).
 -define(WORKFLOW_GRAPH, reliable_digraph).
 
+-type opts()            ::  #{
+                                work_id => reliable_work:id(),
+                                partition_key => binary()
+                            }.
 
--type work_id()             ::  reliable_partition_worker:work_id().
--type work_item()           ::  [{
-                                    reliable_partition_worker:work_item_id(),
-                                    reliable_partition_worker:work_item()
-                                }].
--type opts()                ::  #{
-                                    work_id => work_id(),
-                                    partition_key => binary()
-                                }.
+-type wf_opts()         ::  #{
+                                work_id => reliable_work:id(),
+                                partition_key => binary(),
+                                on_terminate => fun((Reason :: any()) -> any())
+                            }.
 
--type workflow_opts()       ::  #{
-                                    work_id => work_id(),
-                                    partition_key => binary(),
-                                    on_terminate => fun((Reason :: any()) -> any())
-                                }.
--type scheduled_item()      ::  reliable_partition_worker:work_item()
-                                | fun(
-                                    () -> reliable_partition_worker:work_item()
-                                ).
+-type wf_item()         ::  {
+                                Id :: wf_item_id(),
+                                {update | delete, action()}
+                            }.
 
--type workflow_item_id()    ::  term().
--type workflow_item()       ::  {
-                                    Id :: workflow_item_id(),
-                                    {update | delete, scheduled_item()}
-                                }.
+-type action()          ::  reliable_task:new()
+                            | fun(() -> reliable_task:new()).
+-type wf_item_id()      ::  term().
 
 
--export_type([work_id/0]).
--export_type([work_item/0]).
+
 -export_type([opts/0]).
--export_type([scheduled_item/0]).
--export_type([workflow_item/0]).
--export_type([workflow_item_id/0]).
--export_type([workflow_opts/0]).
+-export_type([wf_item/0]).
+-export_type([wf_item_id/0]).
+-export_type([wf_opts/0]).
+-export_type([action/0]).
 
 -export([abort/1]).
 -export([add_workflow_items/1]).
@@ -101,45 +92,39 @@
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(WorkItems :: [work_item()]) ->
-    {ok, Instance :: reliable_partition_worker:work_ref()} | {error, term()}.
+-spec enqueue(Tasks :: [reliable_task:new()]) ->
+    {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
 
-enqueue(WorkItems) ->
-    enqueue(WorkItems, #{}).
+enqueue(Tasks) ->
+    enqueue(Tasks, #{}).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(WorkItems :: [work_item()], Opts :: opts()) ->
-    {ok, Instance :: reliable_partition_worker:work_ref()} | {error, term()}.
+-spec enqueue(Tasks :: [reliable_task:new()], Opts :: opts()) ->
+    {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
 
-enqueue(WorkItems0, Opts) ->
-
+enqueue(Tasks, Opts) ->
     PartitionKey = maps:get(partition_key, Opts, undefined),
-    Name = binary_to_atom(reliable_config:partition(PartitionKey), utf8),
+    StoreRef = binary_to_atom(reliable_config:partition(PartitionKey), utf8),
     Timeout = maps:get(timeout, Opts, 30000),
 
     WorkId = get_work_id(Opts),
-    %% Add result field expected by reliable_partition_worker:work_item().
-    WorkItems = lists:map(
-        fun({_, _} = Tuple) -> erlang:append_element(Tuple, undefined) end,
-        WorkItems0
-    ),
-
-    reliable_partition_store:enqueue(Name, {WorkId, WorkItems}, Timeout).
+    Work = reliable_work:new(WorkId, Tasks),
+    reliable_partition_store:enqueue(StoreRef, Work, Timeout).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkRef :: reliable_partition_worker:work_ref()) ->
+-spec status(WorkRef :: reliable_work_ref:t()) ->
     not_found | {in_progress, Info :: map()} | {failed, Info :: map()}.
 
 status(WorkerRef) ->
-    reliable_partition_worker:status(WorkerRef).
+    reliable_partition_store:status(WorkerRef).
 
 
 %% -----------------------------------------------------------------------------
@@ -231,7 +216,7 @@ abort(Reason) ->
 %% -----------------------------------------------------------------------------
 -spec workflow(Fun :: fun(() -> any())) ->
     {ok, ResultOfFun :: any()}
-    | {scheduled, WorkRef :: reliable_partition_worker:work_ref(), ResultOfFun :: any()}
+    | {scheduled, WorkRef :: reliable_work_ref:t(), ResultOfFun :: any()}
     | {error, Reason :: any()}
     | no_return().
 
@@ -298,7 +283,7 @@ workflow(Fun) ->
 %% -----------------------------------------------------------------------------
 -spec workflow(Fun ::fun(() -> any()), Opts :: opts()) ->
     {ok, ResultOfFun :: any()}
-    | {scheduled, WorkRef :: reliable_partition_worker:work_ref(), ResultOfFun :: any()}
+    | {scheduled, WorkRef :: reliable_work_ref:t(), ResultOfFun :: any()}
     | {error, Reason :: any()}
     | no_return().
 
@@ -346,7 +331,7 @@ workflow(Fun, Opts) when is_function(Fun, 0) ->
 %% have a workflow initiated.
 %% @end
 %% -----------------------------------------------------------------------------
--spec add_workflow_items([workflow_item()]) -> ok | no_return().
+-spec add_workflow_items([wf_item()]) -> ok | no_return().
 
 add_workflow_items(L) ->
     ok = ensure_in_workflow(),
@@ -366,8 +351,8 @@ add_workflow_items(L) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec add_workflow_precedence(
-    As :: workflow_item_id() | [workflow_item_id()],
-    Bs :: workflow_item_id() | [workflow_item_id()]) -> ok | no_return().
+    As :: wf_item_id() | [wf_item_id()],
+    Bs :: wf_item_id() | [wf_item_id()]) -> ok | no_return().
 
 add_workflow_precedence(As, Bs) when is_list(As) andalso is_list(Bs) ->
     ok = ensure_in_workflow(),
@@ -400,8 +385,8 @@ add_workflow_precedence(A, B) ->
 %% have a workflow initiated.
 %% @end
 %% -----------------------------------------------------------------------------
-- spec get_workflow_item(workflow_item_id()) ->
-    workflow_item() | no_return() | no_return().
+- spec get_workflow_item(wf_item_id()) ->
+    wf_item() | no_return() | no_return().
 
 get_workflow_item(Id) ->
     ok = ensure_in_workflow(),
@@ -419,8 +404,8 @@ get_workflow_item(Id) ->
 %% have a workflow initiated.
 %% @end
 %% -----------------------------------------------------------------------------
--spec find_workflow_item(workflow_item_id()) ->
-    {ok, workflow_item()} | error | no_return().
+-spec find_workflow_item(wf_item_id()) ->
+    {ok, wf_item()} | error | no_return().
 
 find_workflow_item(Id) ->
     ok = ensure_in_workflow(),
@@ -489,7 +474,7 @@ decrement_nested_count() ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec maybe_enqueue_workflow(Opts :: map()) ->
-    ok | {ok, Instance :: binary()} | no_return().
+    ok | {ok, WorkRef :: reliable_work_ref:t()} | no_return().
 
 maybe_enqueue_workflow(Opts) ->
     case is_nested_workflow() of
@@ -507,16 +492,16 @@ maybe_enqueue_workflow(Opts) ->
 %% -----------------------------------------------------------------------------
 -spec enqueue_workflow(Opts :: map()) ->
     ok
-    | {ok, WorkRef :: reliable_partition_worker:work_ref()}
+    | {ok, WorkRef :: reliable_work_ref:t()}
     | no_return().
 
 enqueue_workflow(Opts) ->
-    case prepare_work() of
+    case prepare_tasks() of
         {ok, []} ->
             ok;
-        {ok, Work} ->
+        {ok, Tasks} ->
             NewOpts = maps:put(work_id, get(?WORKFLOW_ID), Opts),
-            case enqueue(Work, NewOpts) of
+            case enqueue(Tasks, NewOpts) of
                 {ok, _} = OK ->
                     OK;
                 {error, Reason} ->
@@ -532,13 +517,13 @@ enqueue_workflow(Opts) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-prepare_work() ->
+prepare_tasks() ->
     G = get(?WORKFLOW_GRAPH),
     case reliable_digraph:topsort(G) of
         false ->
             {error, no_work};
         Vertices ->
-            prepare_work(Vertices, G, 1, [])
+            prepare_tasks(Vertices, G, 1, [])
     end.
 
 
@@ -547,18 +532,19 @@ prepare_work() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-prepare_work([], _, _, Acc) ->
+prepare_tasks([], _, _, Acc) ->
     {ok, lists:reverse(Acc)};
 
-prepare_work([H|T], G, N0, Acc0) ->
+prepare_tasks([H|T], G, SeqNum0, Acc0) ->
     {_Id, Action} = reliable_digraph:vertex(G, H),
-    {N1, Acc1} = case to_work_item(Action) of
+    {SeqNum, Acc1} = case action_task(Action) of
         undefined ->
-            {N0, Acc0};
-        Work ->
-            {N0 + 1, [{N0, Work}|Acc0]}
+            {SeqNum0, Acc0};
+        Task ->
+            SeqNum1 = SeqNum0 + 1,
+            {SeqNum0 + 1, [{SeqNum1, Task}|Acc0]}
     end,
-    prepare_work(T, G, N1, Acc1).
+    prepare_tasks(T, G, SeqNum, Acc1).
 
 
 %% -----------------------------------------------------------------------------
@@ -566,15 +552,17 @@ prepare_work([H|T], G, N0, Acc0) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-to_work_item(undefined) ->
+action_task(undefined) ->
     undefined;
 
-to_work_item({_, Fun}) when is_function(Fun, 0) ->
+action_task({_, Fun}) when is_function(Fun, 0) ->
     Fun();
 
-to_work_item({_, WorkItem}) when tuple_size(WorkItem) == 4 ->
-    WorkItem.
-
+action_task({_, Task}) ->
+    case reliable_task:is_type(Task) of
+        true -> Task;
+        false -> error(badarg)
+    end.
 
 
 %% -----------------------------------------------------------------------------

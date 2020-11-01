@@ -4,6 +4,9 @@ digraph G {
     nodesep=0.5
     splines=false;
 
+    graph [fontname="BlinkMacSystemFont"]
+    node [fontname="BlinkMacSystemFont" height=1 fixedsize=true]
+    edge [fontname="BlinkMacSystemFont"]
 
     node [shape=box width=2 height=1 fixedsize=true]
         pod [label="pod" color=gray fontcolor=gray]
@@ -22,7 +25,7 @@ digraph G {
         bucket4 [label="service-N\npartition_2"]
         bucket5 [label="service-N\npartition_3"]
 
-    edge [arrowtail=vee arrowhead=vee dir=back]
+    edge [dir=back color=red]
         pod -> partition:ne [label="pop" color=gray fontcolor=gray]
         pod0 -> bucket0:ne
         pod0 -> bucket1:ne
@@ -32,7 +35,7 @@ digraph G {
         pod2 -> bucket4:ne
         pod2 -> bucket5:ne
 
-    edge [arrowtail=vee dir=forward style=dashed]
+    edge [dir=forward color=blue]
         pod -> partition:nw [label="put" color=gray fontcolor=gray]
         pod0 -> bucket0:nw
         pod0 -> bucket1:nw

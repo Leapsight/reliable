@@ -51,7 +51,13 @@ end_per_testcase(Case, _Config) ->
 basic_test(_Config) ->
     %% Enqueue a write into Riak.
     Object = riakc_obj:new(<<"groceries">>, <<"mine">>, <<"eggs & bacon">>),
-    Work = [{1, {node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]}}],
+    Work = [
+        {1,
+            reliable_task:new(
+                node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]
+            )
+        }
+    ],
     {ok, _} = reliable:enqueue(Work, #{work_id => <<"basic">>}),
 
     %% Sleep for 5 seconds for write to happen.
@@ -71,9 +77,17 @@ index_test(_Config) ->
     Index = riakc_set:new(),
     Index1 = riakc_set:add_element(<<"cmeik">>, Index),
     Work = [
-        {1, {node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]}},
-        {2, {node(), riakc_pb_socket, update_type,
-            [{symbolic, riakc}, {<<"sets">>, <<"users">>}, <<"users">>, riakc_set:to_op(Index1)]}}
+        {1,
+            reliable_task:new(
+                node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]
+            )
+        },
+        {2,
+            reliable_task:new(
+                node(), riakc_pb_socket, update_type,
+                [{symbolic, riakc}, {<<"sets">>, <<"users">>}, <<"users">>, riakc_set:to_op(Index1)]
+            )
+        }
     ],
 
     {ok, _} = reliable:enqueue(Work, #{work_id => <<"cmeik">>}),
@@ -108,15 +122,22 @@ workflow_test(_) ->
     Index1 = riakc_set:add_element(<<"aramallo">>, Index),
 
     %% We defined them outside the workflow fun just to use the vars in the mock
-    A = {update, {node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]}},
+    A = {update,
+        reliable_task:new(
+            node(), riakc_pb_socket, put, [{symbolic, riakc}, Object]
+        )
+    },
     B = {update,
-            {node(), riakc_pb_socket, update_type,[
-                {symbolic, riakc},
-                {<<"sets">>, <<"users">>},
-                <<"users">>,
-                riakc_set:to_op(Index1)
-            ]}
-        },
+            reliable_task:new(
+                node(), riakc_pb_socket, update_type,
+                [
+                    {symbolic, riakc},
+                    {<<"sets">>, <<"users">>},
+                    <<"users">>,
+                    riakc_set:to_op(Index1)
+                ]
+            )
+    },
 
     Fun = fun() ->
         ok = reliable:add_workflow_items([{a, A}]),
@@ -132,7 +153,10 @@ workflow_test(_) ->
 
     meck:expect(reliable, enqueue, fun
         (_, Work) ->
-            ?assertEqual([{1, A}, {2, B}], Work),
+            ?assertEqual(
+                [{1, element(2, A)}, {2, element(2, B)}],
+                Work
+            ),
             ok
     end),
 

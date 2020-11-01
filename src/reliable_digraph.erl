@@ -38,26 +38,27 @@
 
 
 -record(reliable_digraph, {
-  vtree = dict:new()    :: dict:dict(),
-  etree = dict:new()    :: dict:dict(),
-  ntree = dict:new()    :: dict:dict(),
-  cyclic = true         :: boolean(),
-  vseq = 0              :: non_neg_integer(),
-  eseq = 0              :: non_neg_integer(),
-  vers = 0              :: non_neg_integer()
+  vtree = dict:new()            ::  dict:dict(),
+  etree = dict:new()            ::  dict:dict(),
+  ntree = dict:new()            ::  dict:dict(),
+  cyclic = true                 ::  boolean(),
+  vseq = 0                      ::  non_neg_integer(),
+  eseq = 0                      ::  non_neg_integer(),
+  vers = 0                      ::  non_neg_integer()
 }).
 
 -record(reliable_digraph_view, {
-  edges = undefined     :: dict:dict(),
-  vers = 0              :: non_neg_integer()
+  edges = undefined             ::  dict:dict(),
+  vers = 0                      ::  non_neg_integer()
 }).
 
--type t()               :: #reliable_digraph{}.
--type edge()            :: term().
--type label()           :: term().
--type vertex()          :: term().
+-type t()                       ::  #reliable_digraph{}.
+-type edge()                    ::  term().
+-type label()                   ::  term().
+-type vertex()                  ::  term().
 
--type reliable_digraph_view() :: #reliable_digraph_view{}.
+-type reliable_digraph_view()   ::  #reliable_digraph_view{}.
+-type type()                    ::  cyclic | acyclic.
 
 -export_type([t/0]).
 -export_type([edge/0]).
@@ -154,10 +155,11 @@ new() ->
 %% @doc Returns a new instance of a reliable_digraph with type Type.
 %% @end
 %% -----------------------------------------------------------------------------
--spec new(Type :: atom() | {atom(), boolean()}) -> t().
+-spec new(Type :: type() | {type(), boolean()}) -> t() | no_return().
 
 new(Type) ->
-    #reliable_digraph{cyclic = type_to_boolean(Type)}.
+    #reliable_digraph{cyclic = is_cyclic(Type)}.
+
 
 
 %% -----------------------------------------------------------------------------
@@ -261,6 +263,7 @@ has_vertex(G, V) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec add_vertex(G :: t()) -> {vertex(), t()} | {error, string()}.
+-dialyzer({no_improper_lists, add_vertex/1}).
 
 add_vertex(G) ->
     % We create a new vertex id by increasing G's vseq number
@@ -524,6 +527,8 @@ add_edge(G, E, V1, V2, Label) ->
 
 
 %% @private
+-dialyzer({no_improper_lists, do_add_edge/5}).
+
 do_add_edge(G, [], V1, V2, Label) ->
     K = G#reliable_digraph.eseq + 1,
     E = ['$e' | K],
@@ -538,10 +543,10 @@ do_add_edge(G, E, V1, V2, Label) ->
                     G2 = add_edge_to_etree(G, E, Value),
                     add_edge_to_ntree(G2, E, Value);
                 false ->
-                    erlang:exit("Vertex 2 does not exist", V2)
+                    error({"Vertex 2 does not exist", V2})
             end;
         false ->
-            erlang:exit("Vertex 1 does not exist", V1)
+            error({"Vertex 1 does not exist", V1})
     end.
 
 
@@ -673,7 +678,7 @@ get_short_cycle(G, V) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec get_path(G :: t(), V1::vertex(), V2::vertex()) -> [vertex()].
+-spec get_path(G :: t(), V1::vertex(), V2::vertex()) -> [vertex()] | false.
 
 get_path(G, V1, V2) ->
 	one_path(out_neighbours(G, V1), V2, [], [V1], [V1], 1, G, 1).
@@ -864,7 +869,7 @@ remove_edge_from_ntree(G, E) ->
                 Acc;
             {ok, [E]} ->
                 dict:erase(X, Acc);
-            {ok, List} ->
+            {ok, List} when is_list(List) ->
                 case lists:subtract(List, [E]) of
                     [] ->
                     dict:erase(X, Acc);
@@ -1156,7 +1161,7 @@ loop_vertices(G) ->
 -spec subgraph(Digraph, Vertices) -> SubGraph when
     Digraph :: t(),
     Vertices :: [vertex()],
-    SubGraph :: t().
+    SubGraph :: t() | no_return().
 
 subgraph(G, Vs) ->
 	try
@@ -1169,10 +1174,10 @@ subgraph(G, Vs) ->
 
 -spec subgraph(Digraph, Vertices, Options) -> SubGraph when
     Digraph :: t(),
-    SubGraph :: t(),
+    SubGraph :: t() | no_return(),
     Vertices :: [vertex()],
     Options :: [{'type', SubgraphType} | {'keep_labels', boolean()}],
-    SubgraphType :: 'inherit' | [term()].
+    SubgraphType :: 'inherit' | type() | {type(), boolean}.
 
 subgraph(G, Vs, Opts) ->
 	try
@@ -1313,75 +1318,89 @@ remove_singletons([], _G, L) ->
 is_reflexive_vertex(V, G) ->
 	lists:member(V, out_neighbours(G, V)).
 
+
 subgraph_opts(G, Vs, Opts) ->
 	subgraph_opts(Opts, inherit, true, G, Vs).
 
-subgraph_opts([{type, Type} | Opts], _Type0, Keep, G, Vs)
-when Type =:= inherit; is_list(Type) ->
+subgraph_opts([{type, Type} | Opts], _Type0, Keep, G, Vs) ->
 	subgraph_opts(Opts, Type, Keep, G, Vs);
+
 subgraph_opts([{keep_labels, Keep} | Opts], Type, _Keep0, G, Vs)
 when is_boolean(Keep) ->
 	subgraph_opts(Opts, Type, Keep, G, Vs);
-subgraph_opts([], inherit, Keep, G, Vs) ->
-    Info = info(G),
-    {_, {_, Cyclicity}} = lists:keysearch(cyclicity, 1, Info),
-    {_, {_, Protection}} = lists:keysearch(protection, 1, Info),
-    subgraph(G, Vs, [Cyclicity, Protection], Keep);
-subgraph_opts([], Type, Keep, G, Vs) ->
+
+subgraph_opts([], inherit, Keep, #reliable_digraph{cyclic = Val} = G, Vs) ->
+    subgraph(G, Vs, {cyclic, Val}, Keep);
+
+subgraph_opts([], Type, Keep, #reliable_digraph{} = G, Vs) ->
     subgraph(G, Vs, Type, Keep);
+
 subgraph_opts(_, _Type, _Keep, _G, _Vs) ->
     throw(badarg).
 
+
 subgraph(G, Vs, Type, Keep) ->
 	try new(Type) of
-		SG ->
-			lists:foreach(
-				fun(V) ->
-					subgraph_vertex(V, G, SG, Keep) end, Vs),
-					EFun = fun(V) ->
-						lists:foreach(fun(E) ->
-						subgraph_edge(E, G, SG, Keep)
-					end,
-					out_edges(G, V))
-				end,
-				lists:foreach(EFun, vertices(SG)
-			),
-			SG
+		SG0 ->
+			SG1 = lists:foldl(
+                fun(V, Acc) -> subgraph_vertex(V, G, Acc, Keep) end,
+                SG0,
+                Vs
+            ),
+            lists:foldl(
+                fun(V, Acc) ->
+                    lists:foldl(
+                        fun(E, IAcc) ->
+                            subgraph_edge(E, G, IAcc, Keep)
+                        end,
+                        Acc,
+                        out_edges(G, V)
+                    )
+                end,
+                SG1,
+                vertices(SG1)
+            )
 	catch
 		error:badarg ->
 			throw(badarg)
 	end.
 
+
 subgraph_vertex(V, G, SG, Keep) ->
 	case vertex(G, V) of
-		false -> ok;
+		false -> SG;
 		_ when not Keep -> add_vertex(SG, V);
 		{_V, Label} when Keep -> add_vertex(SG, V, Label)
 	end.
 
+
 subgraph_edge(E, G, SG, Keep) ->
 	{_E, V1, V2, Label} = edge(G, E),
 	case vertex(SG, V2) of
-		false -> ok;
+		false -> SG;
 		_ when not Keep -> add_edge(SG, E, V1, V2, []);
 		_ when Keep -> add_edge(SG, E, V1, V2, Label)
 	end.
+
 
 -spec condense(list(), t(), t(), dict:dict(), dict:dict()) ->
 	t().
 
 condense(SC, G, SCG0, V2I, I2C) ->
 	NFun = fun(Neighbour, Acc) ->
-		[{_V,I}] = dict:fetch(Neighbour, V2I),
-		dict:store(I, Acc)
+		[{_V, I}] = dict:fetch(Neighbour, V2I),
+		[I| Acc]
 	end,
 	VFun = fun(V, VAcc) ->
 		lists:foldl(NFun, VAcc, out_neighbours(G, V))
 	end,
-	T = lists:foldl(VFun, dict:new(), SC),
-	SCG1 = add_vertex(SCG0, SC),
+
+	T = lists:foldl(VFun, [], SC),
+
+    SCG1 = add_vertex(SCG0, SC),
+
 	FoldFun = fun(I, SCGA0) ->
-		[{_,C}] = dict:fetch(I, I2C),
+		[{_, C}] = dict:fetch(I, I2C),
 	 	SCGA1 = add_vertex(SCGA0, C),
 	 	case C =/= SC of
 	 		true ->
@@ -1390,7 +1409,7 @@ condense(SC, G, SCG0, V2I, I2C) ->
 	 			SCGA1
 	 	end
     end,
-    dict:fold(FoldFun, SCG1, T).
+    lists:foldl(FoldFun, SCG1, T).
 
 
 
@@ -1398,7 +1417,7 @@ condense(SC, G, SCG0, V2I, I2C) ->
 
 to_dot(G = #reliable_digraph{}, File) ->
   Edges = [reliable_digraph:edge(G, E) || E <- reliable_digraph:edges(G)],
-  {ok, S} = file:open(File, write),
+  {ok, S} = file:open(File, [write]),
   io:format(S, "~s~n", ["digraph G {"]),
   io:format(S, "~s~n", ["node [shape=oval]"]),
   lists:foreach(
@@ -1419,7 +1438,8 @@ to_dot(G = #reliable_digraph{}, File) ->
 
 
 %% @private
-type_to_boolean(cyclic) -> true;
-type_to_boolean(acyclic) -> false;
-type_to_boolean({cyclic, Val}) when is_boolean(Val) -> Val;
-type_to_boolean({acyclic, Val}) when is_boolean(Val) -> not Val.
+is_cyclic(cyclic) -> true;
+is_cyclic(acyclic) -> false;
+is_cyclic({cyclic, Val}) when is_boolean(Val) -> Val;
+is_cyclic({acyclic, Val}) when is_boolean(Val) -> not Val;
+is_cyclic(_) -> error(badarg).

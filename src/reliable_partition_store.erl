@@ -30,35 +30,6 @@
     backend_ref             ::  reference() | pid()
 }).
 
-%% should be some sort of unique term identifier.
--type work_id() :: binary().
-
-%% MFA, and a node to actually execute the RPC at.
--type work_item() :: {node(), module(), function(), [term()]}.
-
-%% the result of any work performed.
--type work_item_result() :: term().
-
-%% identifier for the work item.
--type work_item_id() :: integer().
-
-%% the work.
--type work() :: {
-    WorkId :: work_id(),
-    Payload :: [{work_item_id(), work_item(), work_item_result()}]
-}.
-
--type work_ref()    ::  {
-    work_ref,
-    Instance :: binary(),
-    WorkId :: work_id()
-}.
-
--export_type([work_ref/0]).
--export_type([work_id/0]).
--export_type([work_item_id/0]).
--export_type([work_item_result/0]).
--export_type([work_item/0]).
 
 
 %% API
@@ -75,6 +46,7 @@
 -export([delete_all/3]).
 -export([status/1]).
 -export([status/2]).
+-export([status/3]).
 
 %% GEN_SERVER CALLBACKS
 -export([init/1]).
@@ -92,6 +64,10 @@
 
 
 
+
+-spec start_link(Name :: atom(), Bucket :: binary()) ->
+    {ok, pid()} | {error, any()}.
+
 start_link(Name, Bucket) ->
     gen_server:start({local, Name}, ?MODULE, [Bucket], []).
 
@@ -100,7 +76,7 @@ start_link(Name, Bucket) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkerRef :: work_ref()) ->
+-spec status(WorkRef :: reliable_work:ref()) ->
     {in_progress, Info :: map()}
     | {failed, Info :: map()}
     | {error, not_found | any()}.
@@ -113,110 +89,141 @@ status(WorkRef) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkerRef :: work_ref(), timeout()) ->
+-spec status(WorkRef :: reliable_work:ref(), timeout()) ->
     {in_progress, Info :: map()}
     | {failed, Info :: map()}
     | {error, not_found | any()}.
 
-status({work_ref, InstanceName, WorkId}, Timeout) ->
-    Instance = binary_to_atom(InstanceName, utf8),
-    gen_server:call(Instance, {status, WorkId}, Timeout).
+status(WorkRef, Timeout) ->
+    Instance = reliable_work_ref:instance(WorkRef),
+    StoreRef = binary_to_atom(Instance, utf8),
+    status(StoreRef, WorkRef, Timeout).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(Name :: atom(), Work :: work()) ->
-    {ok, work_ref()} | {error, term()}.
+-spec status(StoreRef :: atom(), WorkRef :: reliable_work:ref(), timeout()) ->
+    {in_progress, Info :: map()}
+    | {failed, Info :: map()}
+    | {error, not_found | any()}.
 
-enqueue(Name, Work) ->
-    enqueue(Name, Work, 30000).
-
-
-%% -----------------------------------------------------------------------------
-%% @doc
-%% @end
-%% -----------------------------------------------------------------------------
--spec enqueue(Name :: atom(), Work :: work(), Timeout :: timeout()) ->
-    {ok, work_ref()} | {error, term()}.
-
-enqueue(Name, Work, Timeout) ->
-    gen_server:call(Name, {enqueue, Work}, Timeout).
+status(StoreRef, WorkRef, Timeout) when is_atom(StoreRef) ->
+    WorkId = reliable_work_ref:work_id(WorkRef),
+    gen_server:call(StoreRef, {status, WorkId}, Timeout).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec list(Name :: atom(), Opts :: map()) -> {[work()], Continuation :: any()}.
+-spec enqueue(StoreRef :: atom(), Work :: reliable_work:t()) ->
+    {ok, reliable_work:ref()} | {error, term()}.
 
-list(Name, Opts) ->
-    list(Name, Opts, 30000).
-
-
-%% -----------------------------------------------------------------------------
-%% @doc
-%% @end
-%% -----------------------------------------------------------------------------
--spec list(Name :: atom(), Opts :: map(), Timeout :: timeout()) -> [work()].
-
-list(Name, Opts, Timeout) ->
-    gen_server:call(Name, {list, Opts}, Timeout).
+enqueue(StoreRef, Work) ->
+    enqueue(StoreRef, Work, 30000).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec update(Name :: atom(), Work :: work()) -> ok | {error, any()}.
+-spec enqueue(
+    StoreRef :: atom(), Work :: reliable_work:t(), Timeout :: timeout()) ->
+    {ok, reliable_work:ref()} | {error, term()}.
 
-update(Name, Work) ->
-    update(Name, Work, 30000).
+enqueue(StoreRef, Work, Timeout) when is_atom(StoreRef) ->
+    case reliable_work:is_type(Work) of
+        true ->
+            gen_server:call(StoreRef, {enqueue, Work}, Timeout);
+        false ->
+            error({badarg, Work})
+    end.
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec update(Name :: atom(), Work :: work(), Timeout :: timeout()) ->
+-spec list(StoreRef :: atom(), Opts :: map()) ->
+    {[reliable_work:t()], Continuation :: any()}.
+
+list(StoreRef, Opts) ->
+    list(StoreRef, Opts, 30000).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec list(StoreRef :: atom(), Opts :: map(), Timeout :: timeout()) ->
+    {[reliable_work:t()], Continuation :: any()}.
+
+list(StoreRef, Opts, Timeout) ->
+    gen_server:call(StoreRef, {list, Opts}, Timeout).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec update(StoreRef :: atom(), Work :: reliable_work:t()) ->
     ok | {error, any()}.
 
-update(Name, Work, Timeout) ->
-    gen_server:call(Name, {update, Work}, Timeout).
+update(StoreRef, Work) ->
+    update(StoreRef, Work, 30000).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec delete(Name :: atom(), WorkId :: work_id()) ->
+-spec update(
+    StoreRef :: atom(), Work :: reliable_work:t(), Timeout :: timeout()) ->
     ok | {error, any()}.
 
-delete(Name, WorkId) ->
-    delete(Name, WorkId, 30000).
+update(StoreRef, Work, Timeout) ->
+    case reliable_work:is_type(Work) of
+        true ->
+            gen_server:call(StoreRef, {update, Work}, Timeout);
+        false ->
+            error({badarg, Work})
+    end.
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec delete(Name :: atom(), WorkIdOrList :: work_id(), Timeout :: timeout()) ->
+-spec delete(StoreRef :: atom(), WorkId :: reliable_work:id()) ->
     ok | {error, any()}.
 
-delete(Name, WorkId, Timeout) ->
-    delete_all(Name, [WorkId], Timeout).
+delete(StoreRef, WorkId) ->
+    delete(StoreRef, WorkId, 30000).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec delete_all(Name :: atom(), WorkIds :: [work_id()]) ->
+-spec delete(
+    StoreRef :: atom(), WorkId :: reliable_work:id(), Timeout :: timeout()) ->
     ok | {error, any()}.
 
-delete_all(Name, WorkIds) ->
-    delete_all(Name, WorkIds, 30000).
+delete(StoreRef, WorkId, Timeout) ->
+    delete_all(StoreRef, [WorkId], Timeout).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec delete_all(StoreRef :: atom(), WorkIds :: [reliable_work:id()]) ->
+    ok | {error, any()}.
+
+delete_all(StoreRef, WorkIds) ->
+    delete_all(StoreRef, WorkIds, 30000).
 
 
 %% -----------------------------------------------------------------------------
@@ -224,11 +231,12 @@ delete_all(Name, WorkIds) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec delete_all(
-    Name :: atom(), WorkIds :: [work_id()], Timeout :: timeout()) ->
-    ok | {error, any()}.
+    StoreRef :: atom(),
+    WorkIds :: [reliable_work:id()],
+    Timeout :: timeout()) -> ok | {error, any()}.
 
-delete_all(Name, WorkIds, Timeout) when is_list(WorkIds)->
-    gen_server:call(Name, {delete, WorkIds}, Timeout).
+delete_all(StoreRef, WorkIds, Timeout) when is_list(WorkIds)->
+    gen_server:call(StoreRef, {delete, WorkIds}, Timeout).
 
 
 
@@ -299,11 +307,13 @@ handle_call({list, Opts}, _From, #state{} = State) ->
     Reply = BackendMod:list(Ref, Bucket, Opts),
     {reply, Reply, State};
 
-handle_call({update, {WorkId, WorkItems}}, _From, #state{} = State) ->
+handle_call({update, Work}, _From, #state{} = State) ->
     BackendMod = State#state.backend,
     Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
-    Reply = BackendMod:update(Ref, Bucket, WorkId, WorkItems),
+    WorkId = reliable_work:id(Work),
+    Tasks = reliable_work:tasks(Work),
+    Reply = BackendMod:update(Ref, Bucket, WorkId, Tasks),
     {reply, Reply, State};
 
 handle_call({delete, WorkIds}, _From, #state{} = State) ->
@@ -353,9 +363,10 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %% @private
-do_enqueue(BackendMod, Ref, Bucket, {WorkId, _} = Work) ->
+do_enqueue(BackendMod, Ref, Bucket, Work) ->
     %% TODO: Deduplicate here.
     %% TODO: Replay once completed.
+    WorkId = reliable_work:id(Work),
     ?LOG_INFO(#{
         message => "Enqueuing work",
         work_id => WorkId,
@@ -364,7 +375,8 @@ do_enqueue(BackendMod, Ref, Bucket, {WorkId, _} = Work) ->
 
     case BackendMod:enqueue(Ref, Bucket, Work) of
         ok ->
-            {ok, {work_ref, Bucket, WorkId}};
+            WorkRef = reliable_work:ref(Bucket, Work),
+            {ok, WorkRef};
         {error, _} = Error ->
            Error
     end.
