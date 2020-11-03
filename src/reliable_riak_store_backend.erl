@@ -75,10 +75,9 @@ init() ->
 
 enqueue(Ref, Bucket, Work) ->
     WorkId = reliable_work:id(Work),
-    Tasks =  reliable_work:tasks(Work),
 
     Fun = fun(Pid) ->
-        Object = riakc_obj:new(Bucket, WorkId, term_to_binary(Tasks)),
+        Object = riakc_obj:new(Bucket, WorkId, term_to_binary(Work)),
         riakc_pb_socket:put(Pid, Object)
     end,
 
