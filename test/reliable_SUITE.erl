@@ -28,6 +28,7 @@ init_per_suite(Config) ->
     %% Allow keylisting.
     application:set_env(riakc, allow_listing, true),
     application:ensure_all_started(reliable),
+    logger:set_application_level(reliable, info),
     meck:unload(),
     Config.
 

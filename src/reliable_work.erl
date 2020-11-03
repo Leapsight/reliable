@@ -2,7 +2,7 @@
 
 -record(reliable_work, {
     id                      ::  binary(),
-    tasks = ordsets:new()   ::  ordsets:ordset({order(), reliable_task:t()})
+    tasks = #{}             ::  #{order() := reliable_task:t()}
 }).
 
 
@@ -110,7 +110,7 @@ when is_integer(Order) andalso Order > 0 ->
     case reliable_task:is_type(Task) of
         true ->
             Work#reliable_work{
-                tasks = ordsets:add_element({Order, Task}, Tasks)
+                tasks = maps:put(Order, Task, Tasks)
             };
         false ->
             error({badarg, Task})
@@ -121,6 +121,26 @@ when is_integer(Order) andalso Order > 0 ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+-spec update_task(Order :: order(), Task :: reliable_task:t(), Work :: t()) -> t().
+
+update_task(Order, Task, #reliable_work{tasks = Tasks} = Work)
+when is_integer(Order) andalso Order > 0 ->
+    case reliable_task:is_type(Task) of
+        true ->
+            Work#reliable_work{
+                tasks = maps:update(Order, Task, Tasks)
+            };
+        false ->
+            error({badarg, Task})
+    end.
+
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
 -spec tasks(t()) -> [{order(), reliable_task:t()}].
 
-tasks(#reliable_work{tasks = Val}) -> Val.
+tasks(#reliable_work{tasks = Val}) ->
+    maps:to_list(Val).

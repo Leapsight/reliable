@@ -245,7 +245,8 @@ process_work(Work, {Acc, State}) ->
     }),
 
     %% Only remove the work when all of the work items are done.
-    ItemAcc = {true, [], WorkId, Tasks, State},
+    ItemAcc = {true, [], Work, State},
+
     case lists:foldl(fun process_tasks/2, ItemAcc, Tasks) of
         {true, _, _, _, _} ->
             %% We made it through the entire list with a result for
@@ -274,37 +275,36 @@ process_work(Work, {Acc, State}) ->
 
 
 %% @private
-process_tasks(Last, {false, Completed, WorkId, Tasks, State}) ->
+process_tasks(Last, {false, Completed, Work, State}) ->
     %% Don't iterate if the last item wasn't completed.
     ?LOG_INFO(#{
         message => "Not attempting next item, since last failed.",
-        work_id => WorkId
+        work_id => reliable_work:work_id(Work)
     }),
-    {false, Completed ++ [Last], WorkId, Tasks, State};
+    {false, Completed ++ [Last], Work, State};
 
 process_tasks(
-    {TaskId, Task0} = Last, {true, Completed, WorkId, Tasks, State}) ->
+    {TaskId, Task0} = Last, {true, Completed, Work, State}) ->
     ?LOG_DEBUG(#{
         message => "Found task to be performed.",
-        work_id => WorkId,
+        work_id => reliable_work:work_id(Work),
         task_id => TaskId,
         task => Task0
     }),
 
     case reliable_task:result(Task0) of
         undefined ->
-            {Bool, NewTasks} = do_process_task(
-                {TaskId, Task0}, Tasks, WorkId, State
-            ),
-            {Bool, Completed ++ [Last], WorkId, NewTasks, State};
+            {Bool, NewWork} = do_process_task({TaskId, Task0}, Work, State),
+            {Bool, Completed ++ [Last], NewWork, State};
         _ ->
-            {true, Completed ++ [Last], WorkId, Tasks, State}
+            {true, Completed ++ [Last], Work, State}
     end.
 
 
-do_process_task({TaskId, Task0}, Tasks, WorkId, State) ->
+do_process_task({TaskId, Task0}, Work, State) ->
     %% Destructure work to be performed.
     StoreName = State#state.store_name,
+    WorkId = reliable_work:work_id(Work),
 
     %% Attempt to perform task.
     try
@@ -329,26 +329,32 @@ do_process_task({TaskId, Task0}, Tasks, WorkId, State) ->
         }),
 
         %% Update task
-        NewTasks = lists:keyreplace(TaskId, 1, Tasks, Task1),
-        NewWork = reliable_work:new(WorkId, NewTasks),
+        NewWork = reliable_work:update_task(TaskId, Task1, Work),
         Result = reliable_partition_store:update(StoreName, NewWork),
 
         case Result of
             ok ->
-                ?LOG_DEBUG(#{message => "Updated work", work_id => WorkId}),
-                {true, NewTasks};
+                ?LOG_DEBUG(#{
+                    message => "Updated work",
+                    work_id => WorkId
+                }),
+                {true, NewWork};
             {error, Reason} ->
                 ?LOG_DEBUG(#{
                     message => "Writing failed",
                     work_id => WorkId,
                     reason => Reason
                 }),
-                {false, Tasks}
+                {false, Work}
         end
     catch
-        _:EReason ->
-            ?LOG_ERROR(#{message => "Got exception", reason => EReason}),
-            {false, Tasks}
+        _:EReason:Stacktrace ->
+            ?LOG_ERROR(#{
+                message => "Got exception",
+                reason => EReason,
+                stacktrace => Stacktrace
+            }),
+            {false, Work}
     end.
 
 

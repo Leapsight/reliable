@@ -106,7 +106,7 @@ enqueue(Tasks) ->
 -spec enqueue(Tasks :: [reliable_task:new()], Opts :: opts()) ->
     {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
 
-enqueue(Tasks, Opts) ->
+enqueue(Tasks, Opts) when is_list(Tasks) ->
     PartitionKey = maps:get(partition_key, Opts, undefined),
     StoreRef = binary_to_atom(reliable_config:partition(PartitionKey), utf8),
     Timeout = maps:get(timeout, Opts, 30000),
