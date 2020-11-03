@@ -330,9 +330,8 @@ do_process_task({TaskId, Task0}, Work, State) ->
 
         %% Update task
         NewWork = reliable_work:update_task(TaskId, Task1, Work),
-        Result = reliable_partition_store:update(StoreName, NewWork),
 
-        case Result of
+        case reliable_partition_store:update(StoreName, NewWork) of
             ok ->
                 ?LOG_DEBUG(#{
                     message => "Updated work",

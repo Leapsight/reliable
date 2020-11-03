@@ -312,8 +312,7 @@ handle_call({update, Work}, _From, #state{} = State) ->
     Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
     WorkId = reliable_work:id(Work),
-    Tasks = reliable_work:tasks(Work),
-    Reply = BackendMod:update(Ref, Bucket, WorkId, Tasks),
+    Reply = BackendMod:update(Ref, Bucket, WorkId, Work),
     {reply, Reply, State};
 
 handle_call({delete, WorkIds}, _From, #state{} = State) ->
