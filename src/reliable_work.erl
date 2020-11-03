@@ -122,7 +122,7 @@ when is_integer(Order) andalso Order > 0 ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec update_task(Order :: order(), Task :: reliable_task:t(), Work :: t()) -> t().
+-spec update_task(Order :: order(), Task :: reliable_task:t(), Work :: t()) ->
     t().
 
 update_task(Order, Task, #reliable_work{tasks = Tasks} = Work)
