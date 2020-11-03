@@ -15,6 +15,7 @@
 
 %% API
 -export([add_task/3]).
+-export([update_task/3]).
 -export([is_type/1]).
 -export([id/1]).
 -export([new/0]).
@@ -122,6 +123,7 @@ when is_integer(Order) andalso Order > 0 ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec update_task(Order :: order(), Task :: reliable_task:t(), Work :: t()) -> t().
+    t().
 
 update_task(Order, Task, #reliable_work{tasks = Tasks} = Work)
 when is_integer(Order) andalso Order > 0 ->
