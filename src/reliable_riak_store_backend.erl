@@ -233,7 +233,7 @@ update(Ref, Bucket, WorkId, WorkItems) ->
 
 list(Ref, Bucket, Opts) ->
     {L, Cont} = fold(
-        Ref, Bucket, fun(Work, Acc) -> [Work | Acc] end, [], Opts
+        Ref, Bucket, fun({_K, V}, Acc) -> [V | Acc] end, [], Opts
     ),
     {lists:reverse(L), Cont}.
 
