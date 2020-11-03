@@ -279,7 +279,7 @@ process_tasks(Last, {false, Completed, Work, State}) ->
     %% Don't iterate if the last item wasn't completed.
     ?LOG_INFO(#{
         message => "Not attempting next item, since last failed.",
-        work_id => reliable_work:work_id(Work)
+        work_id => reliable_work:id(Work)
     }),
     {false, Completed ++ [Last], Work, State};
 
@@ -287,7 +287,7 @@ process_tasks(
     {TaskId, Task0} = Last, {true, Completed, Work, State}) ->
     ?LOG_DEBUG(#{
         message => "Found task to be performed.",
-        work_id => reliable_work:work_id(Work),
+        work_id => reliable_work:id(Work),
         task_id => TaskId,
         task => Task0
     }),
@@ -304,7 +304,7 @@ process_tasks(
 do_process_task({TaskId, Task0}, Work, State) ->
     %% Destructure work to be performed.
     StoreName = State#state.store_name,
-    WorkId = reliable_work:work_id(Work),
+    WorkId = reliable_work:id(Work),
 
     %% Attempt to perform task.
     try

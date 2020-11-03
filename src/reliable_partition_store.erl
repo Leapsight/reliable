@@ -110,7 +110,7 @@ status(WorkRef, Timeout) ->
     | {error, not_found | any()}.
 
 status(StoreRef, WorkRef, Timeout) when is_atom(StoreRef) ->
-    WorkId = reliable_work_ref:work_id(WorkRef),
+    WorkId = reliable_work_ref:id(WorkRef),
     gen_server:call(StoreRef, {status, WorkId}, Timeout).
 
 

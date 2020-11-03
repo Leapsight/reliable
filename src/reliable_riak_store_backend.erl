@@ -103,7 +103,7 @@ enqueue(Ref, Bucket, Work) ->
 get(Ref, WorkRef) ->
     case reliable_work_ref:is_type(WorkRef) of
         true ->
-            WorkId = reliable_work_ref:work_id(WorkRef),
+            WorkId = reliable_work_ref:id(WorkRef),
             Bucket = reliable_work_ref:instance(WorkRef),
 
             Fun = fun(Pid) -> get_work(Pid, Bucket, WorkId, []) end,
