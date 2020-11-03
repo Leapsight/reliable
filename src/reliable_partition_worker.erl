@@ -248,7 +248,7 @@ process_work(Work, {Acc, State}) ->
     ItemAcc = {true, [], Work, State},
 
     case lists:foldl(fun process_tasks/2, ItemAcc, Tasks) of
-        {true, _, _, _, _} ->
+        {true, _, _, _} ->
             %% We made it through the entire list with a result for
             %% everything, remove.
             StoreName = State#state.store_name,
@@ -265,7 +265,7 @@ process_work(Work, {Acc, State}) ->
             WorkRef = reliable_work:ref(Bucket, Work),
             ok = reliable_event_manager:notify({reliable, completed, WorkRef}),
             {Acc ++ [WorkId], State};
-        {false, _, _, _, _} ->
+        {false, _, _, _} ->
             ?LOG_DEBUG(#{
                 message => "Work NOT YET completed",
                 work_id => WorkId
