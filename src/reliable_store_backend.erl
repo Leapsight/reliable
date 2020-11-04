@@ -49,8 +49,7 @@
 -callback update(
     Ref :: ref(),
     Bucket :: binary(),
-    WorkId :: reliable_work:id(),
-    NewItems :: [reliable:task()]) -> ok | {error, any()}.
+    Work :: reliable_work:t()) -> ok | {error, any()}.
 
 
 -callback fold(
@@ -61,11 +60,16 @@
     Opts :: map()) ->
     {NewAcc :: any(), Continuation :: any()}.
 
+
 -callback list(
     Ref :: ref(),
     Bucket :: binary(),
     Opts :: map()) ->
     List :: {[reliable_work:t()], Continuation :: any()}.
+
+
+-callback flush(Ref :: ref(), Bucket :: binary()) -> ok | {error, any()}.
+
 
 -callback get(Ref :: ref(), WorkRef :: reliable_work_ref:t()) ->
     {ok, term()} | {error, not_found | any()}.

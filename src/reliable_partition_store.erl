@@ -38,6 +38,9 @@
 -export([enqueue/3]).
 -export([list/2]).
 -export([list/3]).
+-export([flush_all/0]).
+-export([flush/1]).
+-export([flush/2]).
 -export([update/2]).
 -export([update/3]).
 -export([delete/2]).
@@ -151,6 +154,53 @@ enqueue(StoreRef, Work, Timeout) when is_atom(StoreRef) ->
 
 list(StoreRef, Opts) ->
     list(StoreRef, Opts, 30000).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec flush_all() -> ok | {error, any()}.
+
+flush_all() ->
+    Stores = supervisor:which_children(reliable_partition_store_sup),
+    _ = [
+        begin
+            case flush(StoreRef, 5000) of
+                ok ->
+                    ok;
+                {error, Reason} ->
+                    ?LOG_ERROR(#{
+                        message => "Error while flushing reliable partition store",
+                        reason => Reason,
+                        ref => StoreRef
+                    }),
+                    ok
+            end
+        end || {StoreRef, _, _, _} <- Stores
+    ],
+    ok.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec flush(StoreRef :: atom()) -> ok | {error, any()}.
+
+flush(StoreRef) ->
+    flush(StoreRef, 5000).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec flush(StoreRef :: atom(), Timeout :: timeout()) ->
+    ok | {error, any()}.
+
+flush(StoreRef, Timeout) ->
+    gen_server:call(StoreRef, flush, Timeout).
 
 
 %% -----------------------------------------------------------------------------
@@ -278,7 +328,6 @@ handle_call({enqueue, Work}, From, #state{} = State) ->
             {reply, Error, State}
     end;
 
-
 handle_call({status, WorkId}, _From, State) ->
     BackendMod = State#state.backend,
     Ref = State#state.backend_ref,
@@ -307,12 +356,18 @@ handle_call({list, Opts}, _From, #state{} = State) ->
     Reply = BackendMod:list(Ref, Bucket, Opts),
     {reply, Reply, State};
 
+handle_call(flush, _From, #state{} = State) ->
+    BackendMod = State#state.backend,
+    Ref = State#state.backend_ref,
+    Bucket = State#state.bucket,
+    Reply = BackendMod:flush(Ref, Bucket),
+    {reply, Reply, State};
+
 handle_call({update, Work}, _From, #state{} = State) ->
     BackendMod = State#state.backend,
     Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
-    WorkId = reliable_work:id(Work),
-    Reply = BackendMod:update(Ref, Bucket, WorkId, Work),
+    Reply = BackendMod:update(Ref, Bucket, Work),
     {reply, Reply, State};
 
 handle_call({delete, WorkIds}, _From, #state{} = State) ->

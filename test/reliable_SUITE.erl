@@ -30,6 +30,10 @@ init_per_suite(Config) ->
     application:ensure_all_started(reliable),
     logger:set_application_level(reliable, info),
     meck:unload(),
+
+    %% We remove all work from the queues
+    ok = reliable_partition_store:flush_all(),
+
     Config.
 
 end_per_suite(Config) ->

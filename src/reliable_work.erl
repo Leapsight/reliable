@@ -115,7 +115,13 @@ when is_integer(Order) andalso Order > 0 ->
             };
         false ->
             error({badarg, Task})
-    end.
+    end;
+
+add_task(Order, _, #reliable_work{}) ->
+    error({badarg, Order});
+
+add_task(_, _, Term) ->
+    error({badarg, Term}).
 
 
 %% -----------------------------------------------------------------------------

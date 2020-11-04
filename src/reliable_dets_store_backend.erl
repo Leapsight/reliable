@@ -49,6 +49,8 @@ delete_all(Reference, WorkIds) ->
     lists:foreach(fun(Key) -> dets:delete(Reference, Key) end, WorkIds),
     ok.
 
+
+
 update(Reference, WorkId, WorkItems) ->
     dets:insert(Reference, {WorkId, WorkItems}).
 

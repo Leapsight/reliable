@@ -90,7 +90,7 @@ module(#reliable_task{module = Val}) -> Val.
 %% -----------------------------------------------------------------------------
 -spec function(Task :: t()) -> atom().
 
-function(#reliable_task{result = Val}) -> Val.
+function(#reliable_task{function = Val}) -> Val.
 
 
 %% -----------------------------------------------------------------------------

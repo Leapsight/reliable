@@ -33,8 +33,9 @@
 -export([get/2]).
 -export([delete/3]).
 -export([delete_all/3]).
--export([update/4]).
+-export([update/3]).
 -export([list/3]).
+-export([flush/2]).
 -export([fold/5]).
 
 
@@ -183,26 +184,22 @@ delete_all(Ref, Bucket, WorkIds) ->
 -spec update(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
-    WorkId :: reliable_work:id(),
-    NewItems :: [reliable:task()]) -> ok | {error, any()}.
+    Work :: reliable_work:t()) -> ok | {error, any()}.
 
-update(Ref, Bucket, WorkId, WorkItems) ->
+update(Ref, Bucket, Work) ->
+    WorkId = reliable_work:id(Work),
+
     Fun = fun(Pid) ->
         case riakc_pb_socket:get(Pid, Bucket, WorkId) of
-            {ok, Obj0} ->
-                Obj1 = riakc_obj:update_value(Obj0, WorkItems),
-                case riakc_pb_socket:put(Pid, Obj1, [return_body]) of
-                    {ok, _Obj2} ->
-                        ok;
-                    {error, Reason} ->
-                        ?LOG_ERROR("failed to update object: ~p", [Reason]),
-                        {error, Reason}
-                end;
+            {ok, Obj} ->
+                do_update(Pid, Bucket, Work, Obj);
             {error, Reason} ->
-                ?LOG_ERROR(
-                    "~p: failed to read object before update: ~p",
-                    [?MODULE, Reason]
-                ),
+                ?LOG_ERROR(#{
+                    message => "failed to read object before update.",
+                    work_id => WorkId,
+                    bucket => Bucket,
+                    reason => Reason
+                }),
                 {error, Reason}
         end
     end,
@@ -218,18 +215,15 @@ update(Ref, Bucket, WorkId, WorkItems) ->
 
 
 
-
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-
-
 -spec list(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: {[reliable_work:t()], Continuation :: any()}.
+    List :: {[reliable_work:t()], Continuation :: continuation()}.
 
 list(Ref, Bucket, Opts) ->
     {L, Cont} = fold(
@@ -242,13 +236,25 @@ list(Ref, Bucket, Opts) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+-spec flush(Ref :: reliable_store_backend:ref(), Bucket :: binary()) ->
+    ok | {error, any()}.
+
+flush(Ref, Bucket) ->
+    flush(Ref, Bucket, #{}).
+
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
 -spec fold(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
     Fun :: function(),
     Acc :: any(),
     Opts :: map()) ->
-    {NewAcc :: any(), Continuation :: any()}.
+    {NewAcc :: any(), Continuation :: continuation()}.
 
 fold(Ref, Bucket, Function, Acc, Opts) ->
     Fun = fun(Pid) ->
@@ -339,8 +345,7 @@ maybe_error({error, Reason}) -> error(Reason).
 get_work(Ref, Bucket, WorkId, RiakOpts) ->
     case riakc_pb_socket:get(Ref, Bucket, WorkId, RiakOpts) of
         {ok, Object} ->
-            Data = riakc_obj:get_value(Object),
-            safe_decode_work(Ref, Bucket, WorkId, Data);
+            object_to_work(Ref, Bucket, WorkId, Object);
         {error, notfound} ->
             {error, not_found};
         {error, _} = Error ->
@@ -349,8 +354,10 @@ get_work(Ref, Bucket, WorkId, RiakOpts) ->
 
 
 %% @private
-safe_decode_work(Ref, Bucket, WorkId, Data) ->
+object_to_work(Ref, Bucket, WorkId, Object) ->
+    Data = riakc_obj:get_value(Object),
     Term = binary_to_term(Data),
+
     case reliable_work:is_type(Term) of
         true ->
             {ok, Term};
@@ -358,7 +365,7 @@ safe_decode_work(Ref, Bucket, WorkId, Data) ->
             ?LOG_ERROR(#{
                 message =>
                     "Found invalid work term in store. "
-                    "Work will be deleted.",
+                    "Term will be deleted.",
                 bucket => bucket,
                 work_id => WorkId,
                 term => Term
@@ -366,3 +373,51 @@ safe_decode_work(Ref, Bucket, WorkId, Data) ->
             ok = delete(Ref, Bucket, WorkId),
             {error, invalid_term}
     end.
+
+
+%% @private
+do_update(Pid, Bucket, Work, Obj0) when is_pid(Pid) ->
+    Obj1 = riakc_obj:update_value(Obj0, term_to_binary(Work)),
+
+    case riakc_pb_socket:put(Pid, Obj1, [return_body]) of
+        {ok, _Obj2} ->
+            ok;
+        {error, Reason} ->
+            ?LOG_ERROR(#{
+                message => "Failed to update object.",
+                work_id => reliable_work:id(Work),
+                bucket => Bucket,
+                reason => Reason
+            }),
+            {error, Reason}
+    end.
+
+
+%% @private
+-spec flush(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    Opts :: map()) -> ok | {error, any()}.
+
+flush(Ref, Bucket, Opts) ->
+    Fun = fun({K, _}, Acc) ->
+        case delete(Ref, Bucket, K) of
+            ok ->
+                Acc;
+            {error, not_found} ->
+                Acc;
+            {error, Reason} ->
+                throw(Reason)
+        end
+    end,
+
+    try fold(Ref, Bucket, Fun, ok, Opts) of
+        {ok, undefined} ->
+            ok;
+        {ok, Cont} ->
+            flush(Ref, Bucket, Opts#{continuation => Cont})
+    catch
+        throw:Reason ->
+            {error, Reason}
+    end.
+

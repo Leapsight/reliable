@@ -315,7 +315,11 @@ do_process_task({TaskId, Task0}, Work, State) ->
 
         ?LOG_DEBUG(#{
             message => "Trying to perform task",
-            task => Task0
+            task => Task0,
+            node => Node,
+            module => Module,
+            function => Function,
+            args => Args
         }),
 
         Result = rpc:call(Node, Module, Function, Args),
