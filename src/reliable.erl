@@ -541,8 +541,7 @@ prepare_tasks([H|T], G, SeqNum0, Acc0) ->
         undefined ->
             {SeqNum0, Acc0};
         Task ->
-            SeqNum1 = SeqNum0 + 1,
-            {SeqNum0 + 1, [{SeqNum1, Task}|Acc0]}
+            {SeqNum0 + 1, [{SeqNum0, Task}|Acc0]}
     end,
     prepare_tasks(T, G, SeqNum, Acc1).
 
