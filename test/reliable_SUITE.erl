@@ -69,9 +69,9 @@ basic_test(_Config) ->
     timer:sleep(5000),
 
     %% Attempt to read the object back.
-    {ok, RiakcPid} = riakc_pb_socket:start_link("127.0.0.1", 8087),
-    pong = riakc_pb_socket:ping(RiakcPid),
-    {ok, O} = riakc_pb_socket:get(RiakcPid, <<"groceries">>, <<"mine">>),
+    {ok, Conn} = riakc_pb_socket:start_link("127.0.0.1", 8087),
+    pong = riakc_pb_socket:ping(Conn),
+    {ok, O} = riakc_pb_socket:get(Conn, <<"groceries">>, <<"mine">>),
     <<"eggs & bacon">> = riakc_obj:get_value(O),
 
     ok.
@@ -101,11 +101,11 @@ index_test(_Config) ->
     timer:sleep(5000),
 
     %% Attempt to read the user object back.
-    {ok, RiakcPid} = riakc_pb_socket:start_link("127.0.0.1", 8087),
-    pong = riakc_pb_socket:ping(RiakcPid),
-    {ok, O} = riakc_pb_socket:get(RiakcPid, <<"users">>, <<"cmeik">>),
+    {ok, Conn} = riakc_pb_socket:start_link("127.0.0.1", 8087),
+    pong = riakc_pb_socket:ping(Conn),
+    {ok, O} = riakc_pb_socket:get(Conn, <<"users">>, <<"cmeik">>),
     <<"something">> = riakc_obj:get_value(O),
-    {ok, I} = riakc_pb_socket:fetch_type(RiakcPid, {<<"sets">>, <<"users">>}, <<"users">>),
+    {ok, I} = riakc_pb_socket:fetch_type(Conn, {<<"sets">>, <<"users">>}, <<"users">>),
     ?assertEqual(true, lists:member(<<"cmeik">>, riakc_set:value(I))),
 
     ok.
@@ -171,10 +171,11 @@ workflow_test(_) ->
     timer:sleep(5000),
 
     %% Attempt to read the user object back.
-    {ok, RiakcPid} = riakc_pb_socket:start_link("127.0.0.1", 8087),
-    pong = riakc_pb_socket:ping(RiakcPid),
-    {ok, O} = riakc_pb_socket:get(RiakcPid, <<"users">>, <<"aramallo">>),
+    {ok, Conn} = riakc_pb_socket:start_link("127.0.0.1", 8087),
+    pong = riakc_pb_socket:ping(Conn),
+    {ok, O} = riakc_pb_socket:get(Conn, <<"users">>, <<"aramallo">>),
     <<"something_else">> = riakc_obj:get_value(O),
-    {ok, I} = riakc_pb_socket:fetch_type(RiakcPid, {<<"sets">>, <<"users">>}, <<"users">>),
+    {ok, I} = riakc_pb_socket:fetch_type(
+        Conn, {<<"sets">>, <<"users">>}, <<"users">>),
     ?assertEqual(true, lists:member(<<"aramallo">>, riakc_set:value(I))),
     ok.
