@@ -19,7 +19,7 @@
   1},
  {<<"ksuid">>,
   {git,"https://gitlab.com/leapsight/ksuid.git",
-       {ref,"c1f00dabddac1e3108bfaf5917cb6674f3b843f2"}},
+       {ref,"a5016017edd1e99d46c9a6d4c348cb818e542b13"}},
   0},
  {<<"pooler">>,{pkg,<<"pooler">>,<<"1.5.3">>},1},
  {<<"riak_pb">>,
