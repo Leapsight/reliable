@@ -98,8 +98,7 @@ status(WorkRef) ->
     | {error, not_found | any()}.
 
 status(WorkRef, Timeout) ->
-    Instance = reliable_work_ref:instance(WorkRef),
-    StoreRef = binary_to_atom(Instance, utf8),
+    StoreRef = reliable_work_ref:store_ref(WorkRef),
     status(StoreRef, WorkRef, Timeout).
 
 
@@ -113,7 +112,7 @@ status(WorkRef, Timeout) ->
     | {error, not_found | any()}.
 
 status(StoreRef, WorkRef, Timeout) when is_atom(StoreRef) ->
-    WorkId = reliable_work_ref:id(WorkRef),
+    WorkId = reliable_work_ref:work_id(WorkRef),
     gen_server:call(StoreRef, {status, WorkId}, Timeout).
 
 
@@ -139,9 +138,9 @@ enqueue(StoreRef, Work) ->
 enqueue(StoreRef, Work, Timeout) when is_atom(StoreRef) ->
     case reliable_work:is_type(Work) of
         true ->
-            gen_server:call(StoreRef, {enqueue, Work}, Timeout);
+            gen_server:call(StoreRef, {enqueue, StoreRef, Work}, Timeout);
         false ->
-            error({badarg, Work})
+            {error, {badarg, Work}}
     end.
 
 
@@ -315,14 +314,20 @@ init([Bucket]) ->
     end.
 
 
-handle_call({enqueue, Work}, From, #state{} = State) ->
+handle_call({enqueue, StoreRef, Work}, From, #state{} = State) ->
     BackendMod = State#state.backend,
     Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
-    case do_enqueue(BackendMod, Ref, Bucket, Work) of
+    case do_enqueue(StoreRef, BackendMod, Ref, Bucket, Work) of
         {ok, WorkRef} ->
             _ = gen_server:reply(From, {ok, WorkRef}),
-            ok = reliable_event_manager:notify({reliable, scheduled, WorkRef}),
+            Payload = reliable_work:event_payload(Work),
+            Event = {reliable_event, #{
+                status => scheduled,
+                work_ref => WorkRef,
+                payload => Payload
+            }},
+            ok = reliable_event_manager:notify(Event),
             {noreply, State};
         {error, _} = Error ->
             {reply, Error, State}
@@ -417,20 +422,24 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %% @private
-do_enqueue(BackendMod, Ref, Bucket, Work) ->
-    %% TODO: Deduplicate here.
-    %% TODO: Replay once completed.
+do_enqueue(StoreRef, BackendMod, Ref, Bucket, Work) ->
     WorkId = reliable_work:id(Work),
-    ?LOG_INFO(#{
-        message => "Enqueuing work",
-        work_id => WorkId,
-        instance => Bucket
-    }),
-
     case BackendMod:enqueue(Ref, Bucket, Work) of
         ok ->
-            WorkRef = reliable_work:ref(Bucket, Work),
+            ?LOG_INFO(#{
+                message => "Enqueued work",
+                work_id => WorkId,
+                store_ref => StoreRef,
+                instance => Bucket
+            }),
+            WorkRef = reliable_work:ref(StoreRef, Work),
             {ok, WorkRef};
         {error, _} = Error ->
+            ?LOG_INFO(#{
+                message => "Enqueuing error",
+                work_id => WorkId,
+                store_ref => StoreRef,
+                instance => Bucket
+            }),
            Error
     end.

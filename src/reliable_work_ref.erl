@@ -20,7 +20,7 @@
 -author("Alejandro Ramallo <alejandro.ramallo@leapsight.com>").
 
 -record(reliable_work_ref, {
-    instance    ::  binary(),
+    store_ref   ::  atom(),
     work_id     ::  reliable_work:id()
 }).
 
@@ -31,7 +31,7 @@
 -export([new/2]).
 -export([work_id/1]).
 -export([is_type/1]).
--export([instance/1]).
+-export([store_ref/1]).
 
 
 
@@ -45,10 +45,10 @@
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec new(reliable_work:id(), binary()) -> t().
+-spec new(reliable_work:id(), atom()) -> t().
 
-new(WorkId, Instance) when is_binary(WorkId) andalso is_binary(Instance) ->
-    #reliable_work_ref{work_id = WorkId, instance = Instance}.
+new(WorkId, StoreRef) when is_binary(WorkId) andalso is_atom(StoreRef) ->
+    #reliable_work_ref{work_id = WorkId, store_ref = StoreRef}.
 
 
 
@@ -77,8 +77,8 @@ work_id(#reliable_work_ref{work_id = Val}) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec instance(Ref :: t()) -> binary().
+-spec store_ref(Ref :: t()) -> atom().
 
-instance(#reliable_work_ref{instance = Val}) ->
+store_ref(#reliable_work_ref{store_ref = Val}) ->
     Val.
 

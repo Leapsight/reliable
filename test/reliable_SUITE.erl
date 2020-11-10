@@ -2,17 +2,8 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
 
--export([all/0,
-         init_per_suite/1,
-         end_per_suite/1,
-         init_per_testcase/2,
-         end_per_testcase/2]).
 
--export([basic_test/1,
-         index_test/1,
-         workflow_do_nothing_test/1,
-         workflow_error_test/1,
-         workflow_test/1]).
+-compile([nowarn_export_all, export_all]).
 
 
 all() ->
@@ -21,23 +12,24 @@ all() ->
         index_test,
         workflow_do_nothing_test,
         workflow_error_test,
-        workflow_test
+        workflow_1_test
     ].
 
 init_per_suite(Config) ->
     %% Allow keylisting.
     application:set_env(riakc, allow_listing, true),
     application:ensure_all_started(reliable),
-    logger:set_application_level(reliable, info),
+    logger:set_application_level(reliable, debug),
     meck:unload(),
 
+    %% meck:new(reliable, [passthrough]),
     %% We remove all work from the queues
     ok = reliable_partition_store:flush_all(),
-
+    ct:pal("Env ~p~n", [application:get_all_env(reliable)]),
     Config.
 
 end_per_suite(Config) ->
-    meck:unload(),
+    %% meck:unload(),
     %% Terminate the application.
     application:stop(reliable),
     {save_config, Config}.
@@ -75,6 +67,7 @@ basic_test(_Config) ->
     <<"eggs & bacon">> = riakc_obj:get_value(O),
 
     ok.
+
 
 index_test(_Config) ->
     %% Enqueue a write of object into Riak along with an index update.
@@ -121,7 +114,8 @@ workflow_error_test(_) ->
     ?assertError(foo, reliable:workflow(fun() -> exit(foo) end)).
 
 
-workflow_test(_) ->
+workflow_1_test(_) ->
+
     Object = riakc_obj:new(<<"users">>, <<"aramallo">>, <<"something_else">>),
     Index = riakc_set:new(),
     Index1 = riakc_set:add_element(<<"aramallo">>, Index),
@@ -148,27 +142,16 @@ workflow_test(_) ->
         ok = reliable:add_workflow_items([{a, A}]),
         ok = reliable:add_workflow_items([{b, B}]),
         ok = reliable:add_workflow_precedence(a, b),
+        ok = reliable:set_workflow_event_payload(#{items => [a, b]}),
         ok
     end,
 
-    %% Not really storing the index, we intercept the reliable enqueue call
-    %% here to validate we are getting the right struct
-    meck:new(reliable, [passthrough]),
-    true = meck:validate(reliable),
+    {scheduled, WorkRef, ok} = reliable:workflow(Fun, #{subscribe => true}),
+    {ok, Event} = reliable:yield(WorkRef, 5000),
+    ?assertEqual(completed, maps:get(status, Event)),
+    ?assertEqual(WorkRef, maps:get(work_ref, Event)),
 
-    meck:expect(reliable, enqueue, fun
-        (_, Work) ->
-            ?assertEqual(
-                [{1, element(2, A)}, {2, element(2, B)}],
-                Work
-            ),
-            ok
-    end),
 
-    {scheduled, _, ok} = reliable:workflow(Fun),
-
-    %% Sleep for 5 seconds for write to happen.
-    timer:sleep(5000),
 
     %% Attempt to read the user object back.
     {ok, Conn} = riakc_pb_socket:start_link("127.0.0.1", 8087),
@@ -179,3 +162,4 @@ workflow_test(_) ->
         Conn, {<<"sets">>, <<"users">>}, <<"users">>),
     ?assertEqual(true, lists:member(<<"aramallo">>, riakc_set:value(I))),
     ok.
+

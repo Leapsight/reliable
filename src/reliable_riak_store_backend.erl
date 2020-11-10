@@ -30,7 +30,7 @@
 
 -export([init/0]).
 -export([enqueue/3]).
--export([get/2]).
+-export([get/3]).
 -export([delete/3]).
 -export([delete_all/3]).
 -export([update/3]).
@@ -98,26 +98,20 @@ enqueue(Ref, Bucket, Work) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec get(
-    Ref :: reliable_store_backend:ref(), WorkRef :: reliable_work_ref:t()) ->
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    WorkId :: reliable_work:id()) ->
     {ok, reliable_work:t()} | {error, not_found | any()}.
 
-get(Ref, WorkRef) ->
-    case reliable_work_ref:is_type(WorkRef) of
-        true ->
-            WorkId = reliable_work_ref:id(WorkRef),
-            Bucket = reliable_work_ref:instance(WorkRef),
+get(Ref, Bucket, WorkId) ->
+    Fun = fun(Pid) -> get_work(Pid, Bucket, WorkId, []) end,
+    PoolOpts = #{timeout => 10000},
 
-            Fun = fun(Pid) -> get_work(Pid, Bucket, WorkId, []) end,
-            PoolOpts = #{timeout => 10000},
-
-            case riak_pool:execute(Ref, Fun, PoolOpts) of
-                {true, Res} ->
-                    Res;
-                {false, Reason} ->
-                    {error, Reason}
-            end;
-        false ->
-            {error, {badarg, WorkRef}}
+    case riak_pool:execute(Ref, Fun, PoolOpts) of
+        {true, Res} ->
+            Res;
+        {false, Reason} ->
+            {error, Reason}
     end.
 
 
@@ -128,7 +122,7 @@ get(Ref, WorkRef) ->
 -spec delete(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
-    WorkId :: reliable_work:id()) -> ok.
+    WorkId :: reliable_work:id()) -> ok | {error, Reason :: any()}.
 
 delete(Ref, Bucket, WorkId) when is_pid(Ref) ->
     riakc_pb_socket:delete(Ref, Bucket, WorkId);
@@ -226,9 +220,8 @@ update(Ref, Bucket, Work) ->
     List :: {[reliable_work:t()], Continuation :: continuation()}.
 
 list(Ref, Bucket, Opts) ->
-    {L, Cont} = fold(
-        Ref, Bucket, fun({_K, V}, Acc) -> [V | Acc] end, [], Opts
-    ),
+    Fun = fun({_K, V}, Acc) -> [V | Acc] end,
+    {L, Cont} = fold(Ref, Bucket, Fun, [], Opts),
     {lists:reverse(L), Cont}.
 
 

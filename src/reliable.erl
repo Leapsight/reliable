@@ -33,18 +33,25 @@
 -author("Christopher Meiklejohn <christopher.meiklejohn@gmail.com>").
 -author("Alejandro Ramallo <alejandro.ramallo@leapsight.com>").
 
+-define(DEFAULT_TIMEOUT, 30000).
 -define(WORKFLOW_ID, reliable_workflow_id).
 -define(WORKFLOW_LEVEL, reliable_workflow_level).
 -define(WORKFLOW_GRAPH, reliable_digraph).
+-define(WORKFLOW_EVENT_PAYLOAD, reliable_workflow_event_payload).
+
 
 -type opts()            ::  #{
                                 work_id => reliable_work:id(),
-                                partition_key => binary()
+                                partition_key => binary(),
+                                event_payload => any(),
+                                subscribe => boolean()
                             }.
 
 -type wf_opts()         ::  #{
                                 work_id => reliable_work:id(),
                                 partition_key => binary(),
+                                event_payload => any(),
+                                subscribe => boolean(),
                                 on_terminate => fun((Reason :: any()) -> any())
                             }.
 
@@ -57,6 +64,11 @@
                             | fun(() -> reliable_task:new()).
 -type wf_item_id()      ::  term().
 
+-type status()          ::  #{
+                                work_ref := reliable_work_ref:t(),
+                                status := scheduled | completed,
+                                payload := undefined | any()
+                            }.
 
 
 -export_type([opts/0]).
@@ -64,6 +76,7 @@
 -export_type([wf_item_id/0]).
 -export_type([wf_opts/0]).
 -export_type([action/0]).
+-export_type([status/0]).
 
 -export([abort/1]).
 -export([add_workflow_items/1]).
@@ -72,14 +85,18 @@
 -export([enqueue/2]).
 -export([ensure_in_workflow/0]).
 -export([find_workflow_item/1]).
+-export([get_workflow_event_payload/0]).
 -export([get_workflow_item/1]).
--export([status/1]).
 -export([is_in_workflow/0]).
 -export([is_nested_workflow/0]).
+-export([set_workflow_event_payload/1]).
+-export([status/1]).
 -export([workflow/1]).
 -export([workflow/2]).
 -export([workflow_id/0]).
 -export([workflow_nesting_level/0]).
+-export([yield/1]).
+-export([yield/2]).
 
 
 %% =============================================================================
@@ -107,13 +124,68 @@ enqueue(Tasks) ->
     {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
 
 enqueue(Tasks, Opts) when is_list(Tasks) ->
-    PartitionKey = maps:get(partition_key, Opts, undefined),
-    StoreRef = binary_to_atom(reliable_config:partition(PartitionKey), utf8),
-    Timeout = maps:get(timeout, Opts, 30000),
-
     WorkId = get_work_id(Opts),
-    Work = reliable_work:new(WorkId, Tasks),
-    reliable_partition_store:enqueue(StoreRef, Work, Timeout).
+    PartitionKey = maps:get(partition_key, Opts, undefined),
+    EventPayload = maps:get(event_payload, Opts, undefined),
+    Timeout = maps:get(timeout, Opts, ?DEFAULT_TIMEOUT),
+
+    Work = reliable_work:new(WorkId, Tasks, EventPayload),
+    StoreRef = binary_to_atom(reliable_config:partition(PartitionKey), utf8),
+    WorkRef = reliable_work:ref(StoreRef, Work),
+
+    Subscribed = maybe_subscribe(WorkRef, Opts),
+
+    try reliable_partition_store:enqueue(StoreRef, Work, Timeout) of
+        {ok, WorkRef} ->
+            {ok, WorkRef};
+        {error, Reason} ->
+            throw(Reason)
+    catch
+        _:Reason when Subscribed ->
+            ok = unsubscribe(WorkRef),
+            {error, Reason};
+        _:Reason ->
+            {error, Reason}
+    end.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Returns the value associated with the key `event_payload' when used as
+%% option from a previous {@link enqueue/2}. The calling process is suspended
+%% until the work is completed or
+%%
+%% > This function must be called by the same process from which
+%% {@link enqueue/2} was made otherwise it will never return.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec yield(WorkRef :: reliable_worker:work_ref()) -> {ok, Status :: status()}.
+
+yield(WorkRef) ->
+    yield(WorkRef, infinity).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Returns the value associated with the key `event_payload' when used as
+%% option from a previous {@link enqueue/2} or `timeout' when `Timeout'
+%%  milliseconds has elapsed.
+%%
+%% > This function must be called by the same process from which
+%% {@link enqueue/2} was made otherwise it will never return.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec yield(WorkRef :: reliable_worker:work_ref(), Timeout :: timeout()) ->
+    {ok, Status :: status()} | timeout.
+
+yield(WorkRef, Timeout) ->
+    T0 = erlang:system_time(millisecond),
+
+    receive
+        {gproc_ps_event, reliable_event, #{work_ref := WorkRef} = Event} ->
+            Remaining = Timeout - (erlang:system_time(millisecond) - T0),
+            maybe_yield(WorkRef, Remaining, Event)
+    after
+        Timeout -> timeout
+    end.
 
 
 %% -----------------------------------------------------------------------------
@@ -152,8 +224,8 @@ ensure_in_workflow() ->
 
 %% -----------------------------------------------------------------------------
 %% @doc Returns the current worflow nesting level.
-%% Fails with a `no_workflow' exception if the calling process doe not
-%% have a workflow initiated.
+%% Fails with a `no_workflow' exception if this function is not called withihn
+%% a worflow context.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec workflow_nesting_level() -> pos_integer() | no_return().
@@ -166,8 +238,8 @@ workflow_nesting_level() ->
 %% -----------------------------------------------------------------------------
 %% @doc Returns true if the current workflow is nested i.e. has a parent
 %% workflow.
-%% Fails with a `no_workflow' exception if the calling process doe not
-%% have a workflow initiated.
+%% Fails with a `no_workflow' exception if this function is not called withihn
+%% a worflow context.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec is_nested_workflow() -> boolean() | no_return().
@@ -180,8 +252,8 @@ is_nested_workflow() ->
 %% -----------------------------------------------------------------------------
 %% @doc Returns the workflow identifier or undefined if there is no workflow
 %% initiated for the calling process.
-%% Fails with a `no_workflow' exception if the calling process doe not
-%% have a workflow initiated.
+%% Fails with a `no_workflow' exception if this function is not called withihn
+%% a worflow context.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec workflow_id() -> binary() | no_return().
@@ -327,8 +399,8 @@ workflow(Fun, Opts) when is_function(Fun, 0) ->
 
 %% -----------------------------------------------------------------------------
 %% @doc Adds a workflow item to the workflow stack.
-%% Fails with a `no_workflow' exception if the calling process doe not
-%% have a workflow initiated.
+%% Fails with a `no_workflow' exception if this function is not called withihn
+%% a worflow context.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec add_workflow_items([wf_item()]) -> ok | no_return().
@@ -340,14 +412,54 @@ add_workflow_items(L) ->
     _ = put(?WORKFLOW_GRAPH, reliable_digraph:add_vertices(G, Ids, WorkItem)),
     ok.
 
+%% -----------------------------------------------------------------------------
+%% @doc Returns a workflow item that was previously added to the workflow stack
+%% with the {@link add_workflow_items/2} function.
+%% Fails with a `badkey' exception if there is no workflow item identified by
+%% `Id'.
+%% Fails with a `no_workflow' exception if this function is not called withihn
+%% a worflow context.
+%% @end
+%% -----------------------------------------------------------------------------
+- spec get_workflow_item(wf_item_id()) ->
+    wf_item() | no_return() | no_return().
+
+get_workflow_item(Id) ->
+    ok = ensure_in_workflow(),
+    case reliable_digraph:vertex(get(?WORKFLOW_GRAPH), Id) of
+        {Id, _} = Item ->
+            Item;
+        false ->
+            error(badkey)
+    end.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% Fails with a `no_workflow' exception if this function is not called withihn
+%% a worflow context.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec find_workflow_item(wf_item_id()) ->
+    {ok, wf_item()} | error | no_return().
+
+find_workflow_item(Id) ->
+    ok = ensure_in_workflow(),
+    case reliable_digraph:vertex(get(?WORKFLOW_GRAPH), Id) of
+        {Id, _} = Item ->
+            {ok, Item};
+        false ->
+            error
+    end.
+
 
 %% -----------------------------------------------------------------------------
 %% @doc Relates on or more workflow items in a precedence relationship. This
 %% relationship is used by the {@link workflow/2} function to determine the
 %% workflow execution order based on the resulting precedence graph topsort
 %% calculation.
-%% Fails with a `no_workflow' exception if the calling process doe not
-%% have a workflow initiated.
+%% Fails with a `no_workflow' exception if this function is not called withihn
+%% a worflow context.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec add_workflow_precedence(
@@ -377,44 +489,24 @@ add_workflow_precedence(A, B) ->
 
 
 %% -----------------------------------------------------------------------------
-%% @doc Returns a workflow item that was previously added to the workflow stack
-%% with the {@link add_workflow_items/2} function.
-%% Fails with a `badkey' exception if there is no workflow item identified by
-%% `Id'.
-%% Fails with a `no_workflow' exception if the calling process doe not
-%% have a workflow initiated.
+%% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-- spec get_workflow_item(wf_item_id()) ->
-    wf_item() | no_return() | no_return().
+-spec get_workflow_event_payload() -> Term :: any() | undefined.
 
-get_workflow_item(Id) ->
-    ok = ensure_in_workflow(),
-    case reliable_digraph:vertex(get(?WORKFLOW_GRAPH), Id) of
-        {Id, _} = Item ->
-            Item;
-        false ->
-            error(badkey)
-    end.
+get_workflow_event_payload() ->
+    get(?WORKFLOW_EVENT_PAYLOAD).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
-%% Fails with a `no_workflow' exception if the calling process doe not
-%% have a workflow initiated.
 %% @end
 %% -----------------------------------------------------------------------------
--spec find_workflow_item(wf_item_id()) ->
-    {ok, wf_item()} | error | no_return().
+-spec set_workflow_event_payload(Term :: any() | undefined) -> ok.
 
-find_workflow_item(Id) ->
-    ok = ensure_in_workflow(),
-    case reliable_digraph:vertex(get(?WORKFLOW_GRAPH), Id) of
-        {Id, _} = Item ->
-            {ok, Item};
-        false ->
-            error
-    end.
+set_workflow_event_payload(Term) ->
+    _ = put(?WORKFLOW_EVENT_PAYLOAD, Term),
+    ok.
 
 
 
@@ -500,7 +592,10 @@ enqueue_workflow(Opts) ->
         {ok, []} ->
             ok;
         {ok, Tasks} ->
-            NewOpts = maps:put(work_id, get(?WORKFLOW_ID), Opts),
+            NewOpts = Opts#{
+                work_id => get(?WORKFLOW_ID),
+                event_payload => get_workflow_event_payload()
+            },
             case enqueue(Tasks, NewOpts) of
                 {ok, _} = OK ->
                     OK;
@@ -589,6 +684,7 @@ cleanup() ->
     _ = erase(?WORKFLOW_ID),
     _ = erase(?WORKFLOW_LEVEL),
     _ = erase(?WORKFLOW_GRAPH),
+    _ = erase(?WORKFLOW_EVENT_PAYLOAD),
     ok.
 
 
@@ -635,3 +731,42 @@ get_work_id(#{work_id := Id}) ->
 
 get_work_id(_) ->
     ksuid:gen_id(millisecond).
+
+
+
+%% @private
+
+
+maybe_yield(WorkRef, Timeout, #{status := scheduled}) ->
+    case Timeout > 0 of
+        true ->
+            yield(WorkRef, Timeout);
+        false ->
+            timeout
+    end;
+
+maybe_yield(_, _, #{status := _} = Event) ->
+    {ok, Event}.
+
+
+%% @private
+maybe_subscribe(WorkRef, Opts) ->
+    %% This process can only subscribe to one event, otherwise we get an
+    %% exception from gproc
+    case maps:get(subscribe, Opts, false) of
+        true ->
+            MS = [{
+                '$1',
+                [{'=:=', {map_get, work_ref, '$1'}, {const, WorkRef}}],
+                [true]
+            }],
+            ok = reliable_event_manager:subscribe(reliable_event, MS),
+            true;
+        false ->
+            false
+    end.
+
+
+%% @private
+unsubscribe(_WorkRef) ->
+    reliable_event_manager:unsubscribe(reliable_event).

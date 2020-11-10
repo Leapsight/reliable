@@ -54,6 +54,7 @@
 %% -----------------------------------------------------------------------------
 -module(reliable_event_manager).
 -behaviour(gen_event).
+-include_lib("kernel/include/logger.hrl").
 
 
 -record(state, {
@@ -104,7 +105,9 @@ start_link() ->
         {ok, _} = OK ->
             %% Ads this module as an event handler.
             %% This is to implement the pubsub capabilities.
-            ok = gen_event:add_handler(?MODULE, {?MODULE, pubsub}, [pubsub]),
+            ok = gen_event:add_sup_handler(
+                ?MODULE, {?MODULE, pubsub}, [pubsub]
+            ),
             OK;
         Error ->
             Error
@@ -359,15 +362,20 @@ init([Fn]) when is_function(Fn, 1) ->
     {ok, #state{callback = Fn}}.
 
 
-handle_event({Event, Message}, #state{callback = undefined} = State) ->
-    %% This is the pubsub handler instance
-    %% We notify gproc conditional subscribers
-    _ = gproc_ps:publish_cond(l, Event, Message),
+handle_event({reliable_event, Message} = Event, State) ->
+    case State#state.callback of
+        undefined ->
+            %% This is the pubsub handler instance
+            %% We notify gproc conditional subscribers
+            _ = gproc_ps:publish_cond(l, reliable_event, Message);
+        Fun ->
+            %% We notify callback funs
+            Fun(Event)
+    end,
     {ok, State};
 
-handle_event({Event, Message}, State) ->
-    %% We notify callback funs
-    (State#state.callback)({Event, Message}),
+handle_event(UnknownEvent, State) ->
+    ?LOG_ERROR(#{message => "Received unknown event", event => UnknownEvent}),
     {ok, State}.
 
 

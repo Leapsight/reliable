@@ -2,7 +2,8 @@
 
 -record(reliable_work, {
     id                      ::  binary(),
-    tasks = #{}             ::  #{order() := reliable_task:t()}
+    tasks = #{}             ::  #{order() := reliable_task:t()},
+    event_payload           ::  undefined | any()
 }).
 
 
@@ -15,14 +16,16 @@
 
 %% API
 -export([add_task/3]).
--export([update_task/3]).
--export([is_type/1]).
+-export([event_payload/1]).
 -export([id/1]).
+-export([is_type/1]).
 -export([new/0]).
 -export([new/1]).
 -export([new/2]).
--export([tasks/1]).
+-export([new/3]).
 -export([ref/2]).
+-export([tasks/1]).
+-export([update_task/3]).
 
 
 
@@ -39,34 +42,58 @@
 -spec new() -> t().
 
 new() ->
-    new(ksuid:gen_id(millisecond)).
+    new(undefined).
 
 
 %% -----------------------------------------------------------------------------
-%% @doc
-%% `Id' needs to be a key sortable unique term identifier
+%% @doc Calls {@link new/3} with `[]' as the second argument and `undefined' as
+%% the third argument.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec new(Id :: binary() | undefined) -> t().
 
-new(undefined) ->
-    new();
-
-new(Id) when is_binary(Id) ->
-    #reliable_work{id = Id}.
+new(Id) ->
+    new(Id, [], undefined).
 
 
 %% -----------------------------------------------------------------------------
-%% @doc
-%% `Id' needs to be a key sortable unique term identifier
+%% @doc Calls {@link new/3} with `undefined' as the third argument.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec new(Id :: binary() | undefined, [{order(), reliable_task:t()}]) -> t().
 
 new(Id, Tasks) ->
+    new(Id, Tasks, undefined).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc Creates a new work object with identifier `Id', tasks `Tasks' and event
+%% payload `EnetPayload'.
+%%
+%% `Id' needs to be a key sorteable unique identifier.
+%% If the atom `undefined' is passed, a global key sorteable unique identifier /
+%% will be generated, using `ksuid:gen_id(millisecond)'.
+%%
+%% Tasks is a property lists where the key is and order number and the value an
+%% instance of {@link reliable_work}.
+%%
+%% `EventPayload' is any data you would like the subscribers to the Reliable
+%% Events to receive.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec new(
+    Id :: binary() | undefined,
+    Tasks :: [{order(), reliable_task:t()}],
+    EventPayload :: undefined | any()) -> t().
+
+new(undefined, Tasks, EventPayload) ->
+    new(ksuid:gen_id(millisecond), Tasks, EventPayload);
+
+new(Id, Tasks, EventPayload) when is_binary(Id) ->
+    Work = #reliable_work{id = Id, event_payload = EventPayload},
     lists:foldl(
         fun({Order, Task}, Acc) -> add_task(Order, Task, Acc) end,
-        new(Id),
+        Work,
         Tasks
     ).
 
@@ -94,10 +121,10 @@ id(#reliable_work{id = Val}) -> Val.
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec ref(Instance :: binary(), Work :: t()) -> reliable_work_ref:t().
+-spec ref(StoreRef :: atom(), Work :: t()) -> reliable_work_ref:t().
 
-ref(Instance, #reliable_work{id = Id}) ->
-    reliable_work_ref:new(Id, Instance).
+ref(StoreRef, #reliable_work{id = Id}) ->
+    reliable_work_ref:new(Id, StoreRef).
 
 
 %% -----------------------------------------------------------------------------
@@ -152,3 +179,12 @@ when is_integer(Order) andalso Order > 0 ->
 
 tasks(#reliable_work{tasks = Val}) ->
     maps:to_list(Val).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec event_payload(t()) -> undefined | any().
+
+event_payload(#reliable_work{event_payload = Val}) -> Val.

@@ -25,7 +25,7 @@
 -author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
 
 -record(state, {
-    store_name              ::  atom(),
+    store_ref               ::  atom(),
     bucket                  ::  binary(),
     symbolics               ::  dict:dict(),
     fetch_backoff           ::  backoff:backoff() | undefined,
@@ -53,11 +53,11 @@
 
 
 -spec start_link(
-    WorkerName :: atom(), StoreName :: atom(), Bucket :: binary()) ->
+    WorkerName :: atom(), StoreRef :: atom(), Bucket :: binary()) ->
     {ok, pid()} | {error, any()}.
 
-start_link(WorkerName, StoreName, Bucket) ->
-    gen_server:start({local, WorkerName}, ?MODULE, [StoreName, Bucket], []).
+start_link(WorkerName, StoreRef, Bucket) ->
+    gen_server:start({local, WorkerName}, ?MODULE, [StoreRef, Bucket], []).
 
 
 
@@ -67,7 +67,7 @@ start_link(WorkerName, StoreName, Bucket) ->
 
 
 
-init([StoreName, Bucket]) ->
+init([StoreRef, Bucket]) ->
     ?LOG_DEBUG("Initializing partition store; partition=~p", [Bucket]),
 
     Conn = get_db_connection(),
@@ -75,7 +75,7 @@ init([StoreName, Bucket]) ->
     Symbolics = dict:store(riakc, Conn, dict:new()),
 
     State = #state{
-        store_name = StoreName,
+        store_ref = StoreRef,
         bucket = Bucket,
         symbolics = Symbolics
     },
@@ -201,7 +201,7 @@ schedule_work(fail, #state{fetch_backoff = B0} = State) ->
 %% @private
 process_work(State) ->
 
-    StoreName = State#state.store_name,
+    StoreRef = State#state.store_ref,
     Bucket = State#state.bucket,
 
     ?LOG_DEBUG(#{
@@ -222,7 +222,7 @@ process_work(State) ->
 
     %% We retrieve the work list from the partition store server
     Opts = #{max_results => 100},
-    {WorkList, _Cont} = reliable_partition_store:list(StoreName, Opts),
+    {WorkList, _Cont} = reliable_partition_store:list(StoreRef, Opts),
     {Completed, State} = lists:foldl(fun process_work/2, {[], State}, WorkList),
 
     ?LOG_DEBUG(#{
@@ -251,7 +251,7 @@ process_work(Work, {Acc, State}) ->
         {true, _, _, _} ->
             %% We made it through the entire list with a result for
             %% everything, remove.
-            StoreName = State#state.store_name,
+            StoreRef = State#state.store_ref,
             Bucket = State#state.bucket,
 
             ?LOG_DEBUG(#{
@@ -261,9 +261,15 @@ process_work(Work, {Acc, State}) ->
                 partition => Bucket
             }),
 
-            ok = reliable_partition_store:delete(StoreName, WorkId),
-            WorkRef = reliable_work:ref(Bucket, Work),
-            ok = reliable_event_manager:notify({reliable, completed, WorkRef}),
+            ok = reliable_partition_store:delete(StoreRef, WorkId),
+            WorkRef = reliable_work:ref(StoreRef, Work),
+            Payload = reliable_work:event_payload(Work),
+            Event = {reliable_event, #{
+                status => completed,
+                work_ref => WorkRef,
+                payload => Payload
+            }},
+            ok = reliable_event_manager:notify(Event),
             {Acc ++ [WorkId], State};
         {false, _, _, _} ->
             ?LOG_DEBUG(#{
@@ -303,7 +309,7 @@ process_tasks(
 
 do_process_task({TaskId, Task0}, Work, State) ->
     %% Destructure work to be performed.
-    StoreName = State#state.store_name,
+    StoreRef = State#state.store_ref,
     WorkId = reliable_work:id(Work),
 
     %% Attempt to perform task.
@@ -335,7 +341,7 @@ do_process_task({TaskId, Task0}, Work, State) ->
         %% Update task
         NewWork = reliable_work:update_task(TaskId, Task1, Work),
 
-        case reliable_partition_store:update(StoreName, NewWork) of
+        case reliable_partition_store:update(StoreRef, NewWork) of
             ok ->
                 ?LOG_DEBUG(#{
                     message => "Updated work",
