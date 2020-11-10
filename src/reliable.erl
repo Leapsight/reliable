@@ -742,10 +742,12 @@ maybe_yield(WorkRef, Timeout, #{status := scheduled}) ->
         true ->
             yield(WorkRef, Timeout);
         false ->
+            ok = unsubscribe(WorkRef),
             timeout
     end;
 
-maybe_yield(_, _, #{status := _} = Event) ->
+maybe_yield(WorkRef, _, #{status := _} = Event) ->
+    ok = unsubscribe(WorkRef),
     {ok, Event}.
 
 
