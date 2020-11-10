@@ -90,7 +90,8 @@ init([]) ->
         ?SUPERVISOR(
             reliable_event_handler_watcher_sup, [], permanent, infinity
         ),
-        ?EVENT_MANAGER(reliable_event_manager, permanent, 5000),
+        ?WORKER(reliable_event_manager, [], permanent, 5000),
+        %% ?EVENT_MANAGER(reliable_event_manager, permanent, 5000),
         %% Start partition stores before workers
         ?SUPERVISOR(reliable_partition_store_sup, [], permanent, infinity),
         ?SUPERVISOR(reliable_partition_worker_sup, [], permanent, infinity)
