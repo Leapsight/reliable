@@ -71,14 +71,17 @@
 -callback flush(Ref :: ref(), Bucket :: binary()) -> ok | {error, any()}.
 
 
--callback get(Ref :: ref(), WorkRef :: reliable_work_ref:t()) ->
+-callback get(
+    Ref :: ref(),
+    Bucket :: binary(),
+    WorkId :: reliable_work:id()) ->
     {ok, term()} | {error, not_found | any()}.
 
 
 -callback delete(
     Ref :: ref(),
     Bucket :: binary(),
-    WorkId :: reliable_work:id()) -> ok.
+    WorkId :: reliable_work:id()) -> ok | {error, Reason :: any()}.
 
 
 -callback delete_all(
