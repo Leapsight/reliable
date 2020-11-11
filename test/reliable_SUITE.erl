@@ -146,10 +146,11 @@ workflow_1_test(_) ->
         ok
     end,
 
-    {scheduled, _WorkRef, ok} = reliable:workflow(Fun, #{subscribe => true}),
+    {scheduled, WorkRef, ok} = reliable:workflow(Fun, #{subscribe => true}),
     %% {ok, Event} = reliable:yield(WorkRef, 5000),
     %% ?assertEqual(completed, maps:get(status, Event)),
     %% ?assertEqual(WorkRef, maps:get(work_ref, Event)),
+    {in_progress, _} = reliable:status(WorkRef),
     timer:sleep(5000),
 
 

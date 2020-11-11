@@ -26,6 +26,7 @@
 -export([ref/2]).
 -export([tasks/1]).
 -export([update_task/3]).
+-export([status/1]).
 
 
 
@@ -188,3 +189,32 @@ tasks(#reliable_work{tasks = Val}) ->
 -spec event_payload(t()) -> undefined | any().
 
 event_payload(#reliable_work{event_payload = Val}) -> Val.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec status(t()) -> map().
+
+status(#reliable_work{id = Id, tasks = Tasks, event_payload = Payload}) ->
+    Remaining = maps:fold(
+        fun(_, Task, Acc) ->
+            case reliable_task:result(Task) of
+                undefined ->
+                    Acc + 1;
+                _ ->
+                    %% TODO What if this task failed, did we killed it?
+                    %% check the algorithm
+                    Acc
+            end
+        end,
+        0,
+        Tasks
+    ),
+    #{
+        work_id => Id,
+        items => maps:size(Tasks),
+        remaining_tasks => Remaining,
+        event_payload => Payload
+    }.

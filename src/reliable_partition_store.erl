@@ -363,15 +363,8 @@ handle_call({status, WorkId}, _From, State) ->
     Bucket = State#state.bucket,
 
     Result = case BackendMod:get(Ref, Bucket, WorkId) of
-        {ok, WorkItems} ->
-            Remaining = lists:sum([1 || {_, _, undefined} <- WorkItems]),
-            Info = #{
-                work_id => WorkId,
-                instance => Bucket,
-                items => length(WorkItems),
-                remaining_items => Remaining
-            },
-            {in_progress, Info};
+        {ok, Work} ->
+            {in_progress, reliable_work:status(Work)};
         {error, _} = Error ->
             Error
     end,
