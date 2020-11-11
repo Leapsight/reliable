@@ -36,20 +36,24 @@
 
 
 
--callback init() -> {ok, ref()} | {error, any()}.
+-callback init() -> {ok, ref()} | {error, Reason :: any()}.
 
 
 -callback enqueue(
     Ref :: ref(),
     Bucket :: binary(),
     Work :: reliable_work:t()) ->
-    ok | {error, any()}.
+    ok | {error, Reason :: any()}.
+
+
+-callback flush(Ref :: ref(), Bucket :: binary()) ->
+    ok | {error, Reason :: any()}.
 
 
 -callback update(
     Ref :: ref(),
     Bucket :: binary(),
-    Work :: reliable_work:t()) -> ok | {error, any()}.
+    Work :: reliable_work:t()) -> ok | {error, Reason :: any()}.
 
 
 -callback fold(
@@ -58,17 +62,22 @@
     Fun :: function(),
     Acc :: any(),
     Opts :: map()) ->
-    {NewAcc :: any(), Continuation :: any()}.
+    {NewAcc :: any(), Continuation :: any()} | {error, Reason :: any()}.
+
+
+-callback count(
+    Ref :: ref(),
+    Bucket :: binary(),
+    Opts :: map()) ->
+    List :: integer() | {error, Reason :: any()}.
 
 
 -callback list(
     Ref :: ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: {[reliable_work:t()], Continuation :: any()}.
-
-
--callback flush(Ref :: ref(), Bucket :: binary()) -> ok | {error, any()}.
+    List :: {[reliable_work:t()], Continuation :: any()}
+    | {error, Reason :: any()}.
 
 
 -callback get(
@@ -87,4 +96,4 @@
 -callback delete_all(
     Ref :: ref(),
     Bucket :: binary(),
-    AllCompleted :: [reliable_work:id()]) -> ok.
+    AllCompleted :: [reliable_work:id()]) -> ok | {error, Reason :: any()}.

@@ -45,6 +45,8 @@
 -export([update/3]).
 -export([delete/2]).
 -export([delete/3]).
+-export([count/1]).
+-export([count/2]).
 -export([delete_all/2]).
 -export([delete_all/3]).
 -export([status/1]).
@@ -69,7 +71,7 @@
 
 
 -spec start_link(Name :: atom(), Bucket :: binary()) ->
-    {ok, pid()} | {error, any()}.
+    {ok, pid()} | {error, Reason :: any()}.
 
 start_link(Name, Bucket) ->
     gen_server:start({local, Name}, ?MODULE, [Bucket], []).
@@ -148,18 +150,7 @@ enqueue(StoreRef, Work, Timeout) when is_atom(StoreRef) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec list(StoreRef :: atom(), Opts :: map()) ->
-    {[reliable_work:t()], Continuation :: any()}.
-
-list(StoreRef, Opts) ->
-    list(StoreRef, Opts, 30000).
-
-
-%% -----------------------------------------------------------------------------
-%% @doc
-%% @end
-%% -----------------------------------------------------------------------------
--spec flush_all() -> ok | {error, any()}.
+-spec flush_all() -> ok | {error, Reason :: any()}.
 
 flush_all() ->
     Stores = supervisor:which_children(reliable_partition_store_sup),
@@ -185,7 +176,7 @@ flush_all() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec flush(StoreRef :: atom()) -> ok | {error, any()}.
+-spec flush(StoreRef :: atom()) -> ok | {error, Reason :: any()}.
 
 flush(StoreRef) ->
     flush(StoreRef, 5000).
@@ -196,7 +187,7 @@ flush(StoreRef) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec flush(StoreRef :: atom(), Timeout :: timeout()) ->
-    ok | {error, any()}.
+    ok | {error, Reason :: any()}.
 
 flush(StoreRef, Timeout) ->
     gen_server:call(StoreRef, flush, Timeout).
@@ -206,8 +197,19 @@ flush(StoreRef, Timeout) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec list(StoreRef :: atom(), Opts :: map(), Timeout :: timeout()) ->
+-spec list(StoreRef :: atom(), Opts :: map()) ->
     {[reliable_work:t()], Continuation :: any()}.
+
+list(StoreRef, Opts) ->
+    list(StoreRef, Opts, 30000).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec list(StoreRef :: atom(), Opts :: map(), Timeout :: timeout()) ->
+    {[reliable_work:t()], Continuation :: any()} | {error, Reason :: any()}.
 
 list(StoreRef, Opts, Timeout) ->
     gen_server:call(StoreRef, {list, Opts}, Timeout).
@@ -217,8 +219,30 @@ list(StoreRef, Opts, Timeout) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+-spec count(StoreRef :: atom()) ->
+    Count :: integer() | {error, Reason :: any()}.
+
+count(StoreRef) ->
+    count(StoreRef, 30000).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec count(StoreRef :: atom(), Timeout :: timeout()) ->
+    {[reliable_work:t()], Continuation :: any()}.
+
+count(StoreRef, Timeout) ->
+    gen_server:call(StoreRef, {count, Timeout}, Timeout + 100).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
 -spec update(StoreRef :: atom(), Work :: reliable_work:t()) ->
-    ok | {error, any()}.
+    ok | {error, Reason :: any()}.
 
 update(StoreRef, Work) ->
     update(StoreRef, Work, 30000).
@@ -230,7 +254,7 @@ update(StoreRef, Work) ->
 %% -----------------------------------------------------------------------------
 -spec update(
     StoreRef :: atom(), Work :: reliable_work:t(), Timeout :: timeout()) ->
-    ok | {error, any()}.
+    ok | {error, Reason :: any()}.
 
 update(StoreRef, Work, Timeout) ->
     case reliable_work:is_type(Work) of
@@ -246,7 +270,7 @@ update(StoreRef, Work, Timeout) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec delete(StoreRef :: atom(), WorkId :: reliable_work:id()) ->
-    ok | {error, any()}.
+    ok | {error, Reason :: any()}.
 
 delete(StoreRef, WorkId) ->
     delete(StoreRef, WorkId, 30000).
@@ -258,7 +282,7 @@ delete(StoreRef, WorkId) ->
 %% -----------------------------------------------------------------------------
 -spec delete(
     StoreRef :: atom(), WorkId :: reliable_work:id(), Timeout :: timeout()) ->
-    ok | {error, any()}.
+    ok | {error, Reason :: any()}.
 
 delete(StoreRef, WorkId, Timeout) ->
     delete_all(StoreRef, [WorkId], Timeout).
@@ -269,7 +293,7 @@ delete(StoreRef, WorkId, Timeout) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec delete_all(StoreRef :: atom(), WorkIds :: [reliable_work:id()]) ->
-    ok | {error, any()}.
+    ok | {error, Reason :: any()}.
 
 delete_all(StoreRef, WorkIds) ->
     delete_all(StoreRef, WorkIds, 30000).
@@ -282,7 +306,7 @@ delete_all(StoreRef, WorkIds) ->
 -spec delete_all(
     StoreRef :: atom(),
     WorkIds :: [reliable_work:id()],
-    Timeout :: timeout()) -> ok | {error, any()}.
+    Timeout :: timeout()) -> ok | {error, Reason :: any()}.
 
 delete_all(StoreRef, WorkIds, Timeout) when is_list(WorkIds)->
     gen_server:call(StoreRef, {delete, WorkIds}, Timeout).
@@ -353,6 +377,13 @@ handle_call({status, WorkId}, _From, State) ->
     end,
 
     {reply, Result, State};
+
+handle_call({count, Timeout}, _From, #state{} = State) ->
+    BackendMod = State#state.backend,
+    Ref = State#state.backend_ref,
+    Bucket = State#state.bucket,
+    Reply = BackendMod:count(Ref, Bucket, #{timeout => Timeout}),
+    {reply, Reply, State};
 
 handle_call({list, Opts}, _From, #state{} = State) ->
     BackendMod = State#state.backend,

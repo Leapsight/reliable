@@ -37,6 +37,7 @@
 -export([list/3]).
 -export([flush/2]).
 -export([fold/5]).
+-export([count/3]).
 
 
 
@@ -120,17 +121,18 @@ get(Ref, Bucket, WorkId) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec delete(
-    Ref :: reliable_store_backend:ref(),
+    Ref :: reliable_store_backend:ref() | atom(),
     Bucket :: binary(),
     WorkId :: reliable_work:id()) -> ok | {error, Reason :: any()}.
 
-delete(Ref, Bucket, WorkId) when is_pid(Ref) ->
-    riakc_pb_socket:delete(Ref, Bucket, WorkId);
+delete(Pid, Bucket, WorkId) when is_pid(Pid) ->
+    case riakc_pb_socket:delete(Pid, Bucket, WorkId) of
+        ok -> ok;
+        {error, Reason} -> {error, format_reason(Reason)}
+    end;
 
-delete(Ref, Bucket, WorkId) ->
-    Fun = fun(Pid) ->
-        riakc_pb_socket:delete(Pid, Bucket, WorkId)
-    end,
+delete(Ref, Bucket, WorkId) when is_atom(Ref) ->
+    Fun = fun(Pid) -> delete(Pid, Bucket, WorkId) end,
 
     PoolOpts = #{timeout => 10000},
 
@@ -150,7 +152,7 @@ delete(Ref, Bucket, WorkId) ->
 -spec delete_all(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
-    AllCompleted :: [reliable_work:id()]) -> ok.
+    AllCompleted :: [reliable_work:id()]) -> ok | {error, Reason :: any()}.
 
 delete_all(Ref, Bucket, WorkIds) ->
     Fun = fun(Pid) ->
@@ -194,7 +196,7 @@ update(Ref, Bucket, Work) ->
                     bucket => Bucket,
                     reason => Reason
                 }),
-                {error, Reason}
+                {error, format_reason(Reason)}
         end
     end,
 
@@ -208,6 +210,39 @@ update(Ref, Bucket, Work) ->
     end.
 
 
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec count(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    Opts :: map()) -> Count :: integer() | {error, Reason :: any()}.
+
+count(Ref, Bucket, Opts) ->
+    Fun = fun(Pid) ->
+        Timeout = maps:get(timeout, Opts, 30000),
+        Inputs = {index, Bucket, <<"$bucket">>, <<>>},
+        Query = [
+            {reduce, {modfun, riak_kv_mapreduce, reduce_count_inputs}, [{reduce_phase_batch_size, 1000}] , true}
+        ],
+
+        case riakc_pb_socket:mapred(Pid, Inputs, Query, Timeout) of
+            {ok, [{0, [Count]}]} ->
+                Count;
+            {error, Reason} ->
+                {error, format_reason(Reason)}
+        end
+    end,
+
+    PoolOpts = #{timeout => 10000},
+    case riak_pool:execute(Ref, Fun, PoolOpts) of
+        {true, Res} ->
+            Res;
+        {false, Reason} ->
+            {error, Reason}
+    end.
+
 
 %% -----------------------------------------------------------------------------
 %% @doc
@@ -217,7 +252,8 @@ update(Ref, Bucket, Work) ->
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: {[reliable_work:t()], Continuation :: continuation()}.
+    List :: {[reliable_work:t()], Continuation :: continuation()}
+    | {error, Reason :: any()}.
 
 list(Ref, Bucket, Opts) ->
     Fun = fun({_K, V}, Acc) -> [V | Acc] end,
@@ -230,7 +266,7 @@ list(Ref, Bucket, Opts) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec flush(Ref :: reliable_store_backend:ref(), Bucket :: binary()) ->
-    ok | {error, any()}.
+    ok | {error, Reason :: any()}.
 
 flush(Ref, Bucket) ->
     flush(Ref, Bucket, #{}).
@@ -247,7 +283,8 @@ flush(Ref, Bucket) ->
     Fun :: function(),
     Acc :: any(),
     Opts :: map()) ->
-    {NewAcc :: any(), Continuation :: continuation()}.
+    {NewAcc :: any(), Continuation :: continuation()}
+    | {error, Reason :: any()}.
 
 fold(Ref, Bucket, Function, Acc, Opts) ->
     Fun = fun(Pid) ->
@@ -263,27 +300,30 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
             ReqOpts
         ),
 
-        #index_results_v1{keys = Keys, continuation = Cont1} = maybe_error(Res),
+        case Res of
+            {ok, #index_results_v1{keys = Keys, continuation = Cont1}} ->
+                ?LOG_DEBUG("Got work keys: ~p", [Keys]),
+                FoldFun = fun(Key, Acc1) ->
+                    case get_work(Pid, Bucket, Key, []) of
+                        {ok, Work} ->
+                            ?LOG_DEBUG("got key: ~p", [Key]),
+                            ?LOG_DEBUG("got work: ~p", [Work]),
+                            Function({Key, Work}, Acc1);
+                        {error, Reason} ->
+                            ?LOG_ERROR(
+                                "Error while retrieving work from store; "
+                                "backend=~p, reason=~p, partition=~p, key=~p",
+                                [?MODULE, Reason, Bucket, Key]
+                            ),
+                            Acc1
+                    end
+                end,
+                Result = lists:foldl(FoldFun, Acc, Keys),
+                {Result, Cont1};
+            {error, Reason} ->
+                {error, format_reason(Reason)}
+        end
 
-        ?LOG_DEBUG("Got work keys: ~p", [Keys]),
-
-        FoldFun = fun(Key, Acc1) ->
-            case get_work(Pid, Bucket, Key, []) of
-                {ok, Work} ->
-                    ?LOG_DEBUG("got key: ~p", [Key]),
-                    ?LOG_DEBUG("got work: ~p", [Work]),
-                    Function({Key, Work}, Acc1);
-                {error, Reason} ->
-                    ?LOG_ERROR(
-                        "Error while retrieving work from store; "
-                        "backend=~p, reason=~p, partition=~p, key=~p",
-                        [?MODULE, Reason, Bucket, Key]
-                    ),
-                    Acc1
-            end
-        end,
-        Result = lists:foldl(FoldFun, Acc, Keys),
-        {Result, Cont1}
     end,
 
     PoolOpts = #{timeout => 10000},
@@ -296,17 +336,14 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
                 "Could not retrieve work from store; reason=~p",
                 [Reason]
             ),
-            {[], undefined}
+            {error, Reason}
     end.
-
-
 
 
 
 %% =============================================================================
 %% PRIVATE
 %% =============================================================================
-
 
 
 
@@ -328,10 +365,10 @@ fold_opts(Opts0) ->
     end.
 
 
-
-maybe_error({ok, Result}) -> Result;
-maybe_error({error, "overload"}) -> error(overload);
-maybe_error({error, Reason}) -> error(Reason).
+%% @private
+format_reason("overload") -> overload;
+format_reason(notfound) -> not_found;
+format_reason(Reason) -> Reason.
 
 
 %% @private
@@ -339,10 +376,8 @@ get_work(Ref, Bucket, WorkId, RiakOpts) ->
     case riakc_pb_socket:get(Ref, Bucket, WorkId, RiakOpts) of
         {ok, Object} ->
             object_to_work(Ref, Bucket, WorkId, Object);
-        {error, notfound} ->
-            {error, not_found};
-        {error, _} = Error ->
-            Error
+        {error, Reason} ->
+            {error, format_reason(Reason)}
     end.
 
 
@@ -382,7 +417,7 @@ do_update(Pid, Bucket, Work, Obj0) when is_pid(Pid) ->
                 bucket => Bucket,
                 reason => Reason
             }),
-            {error, Reason}
+            {error, format_reason(Reason)}
     end.
 
 
