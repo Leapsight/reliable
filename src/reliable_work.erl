@@ -9,10 +9,15 @@
 
 -type t()                   ::  #reliable_work{}.
 -type order()               ::  pos_integer().
-
+-type status()              ::  #{
+    work_id => binary(),
+    nbr_of_tasks => integer(),
+    nbr_of_tasks_remaining => integer(),
+    event_payload => any()
+}.
 -export_type([t/0]).
 -export_type([order/0]).
-
+-export_type([status/0]).
 
 %% API
 -export([add_task/3]).
@@ -195,7 +200,7 @@ event_payload(#reliable_work{event_payload = Val}) -> Val.
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(t()) -> map().
+-spec status(t()) -> status().
 
 status(#reliable_work{id = Id, tasks = Tasks, event_payload = Payload}) ->
     Remaining = maps:fold(
@@ -214,7 +219,7 @@ status(#reliable_work{id = Id, tasks = Tasks, event_payload = Payload}) ->
     ),
     #{
         work_id => Id,
-        items => maps:size(Tasks),
-        remaining_tasks => Remaining,
+        nbr_of_tasks => maps:size(Tasks),
+        nbr_of_tasks_remaining => Remaining,
         event_payload => Payload
     }.

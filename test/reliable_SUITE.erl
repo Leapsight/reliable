@@ -55,10 +55,11 @@ basic_test(_Config) ->
             )
         }
     ],
-    {ok, _} = reliable:enqueue(Work, #{work_id => <<"basic">>}),
+    {ok, WorkRef} = reliable:enqueue(Work, #{work_id => <<"basic">>}),
 
     %% Sleep for 5 seconds for write to happen.
-    timer:sleep(5000),
+    {in_progress, _} = reliable:status(WorkRef),
+    {ok, _} = reliable:yield(WorkRef, 5000),
 
     %% Attempt to read the object back.
     {ok, Conn} = riakc_pb_socket:start_link("127.0.0.1", 8087),
@@ -88,10 +89,10 @@ index_test(_Config) ->
         }
     ],
 
-    {ok, _} = reliable:enqueue(Work, #{work_id => <<"cmeik">>}),
+    {ok, WorkRef} = reliable:enqueue(Work, #{work_id => <<"cmeik">>}),
 
-    %% Sleep for 5 seconds for write to happen.
-    timer:sleep(5000),
+    {in_progress, _} = reliable:status(WorkRef),
+    {ok, _} = reliable:yield(WorkRef, 5000),
 
     %% Attempt to read the user object back.
     {ok, Conn} = riakc_pb_socket:start_link("127.0.0.1", 8087),
@@ -150,10 +151,7 @@ workflow_1_test(_) ->
     %% {ok, Event} = reliable:yield(WorkRef, 5000),
     %% ?assertEqual(completed, maps:get(status, Event)),
     %% ?assertEqual(WorkRef, maps:get(work_ref, Event)),
-    {in_progress, _} = reliable:status(WorkRef),
-    timer:sleep(5000),
-
-
+    {ok, _} = reliable:yield(WorkRef, 5000),
 
     %% Attempt to read the user object back.
     {ok, Conn} = riakc_pb_socket:start_link("127.0.0.1", 8087),

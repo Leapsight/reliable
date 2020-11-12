@@ -94,7 +94,7 @@ status(WorkRef) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkRef :: reliable_work:ref(), timeout()) ->
+-spec status(WorkRef :: reliable_work:ref(), Timeout :: timeout()) ->
     {in_progress, Info :: map()}
     | {failed, Info :: map()}
     | {error, not_found | any()}.

@@ -64,19 +64,12 @@
                             | fun(() -> reliable_task:new()).
 -type wf_item_id()      ::  term().
 
--type status()          ::  #{
-                                work_ref := reliable_work_ref:t(),
-                                status := scheduled | completed,
-                                payload := undefined | any()
-                            }.
-
 
 -export_type([opts/0]).
 -export_type([wf_item/0]).
 -export_type([wf_item_id/0]).
 -export_type([wf_opts/0]).
 -export_type([action/0]).
--export_type([status/0]).
 
 -export([abort/1]).
 -export([add_workflow_items/1]).
@@ -107,6 +100,8 @@
 
 %% -----------------------------------------------------------------------------
 %% @doc
+%% > Notice subscriptions are not working at the moment.
+%% > See {@link yield/1,2} to track progress.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec enqueue(Tasks :: [reliable_task:new()]) ->
@@ -118,6 +113,8 @@ enqueue(Tasks) ->
 
 %% -----------------------------------------------------------------------------
 %% @doc
+%% > Notice subscriptions are not working at the moment
+%% > See {@link yield/1,2} to track progress.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec enqueue(Tasks :: [reliable_task:new()], Opts :: opts()) ->
@@ -154,11 +151,16 @@ enqueue(Tasks, Opts) when is_list(Tasks) ->
 %% option from a previous {@link enqueue/2}. The calling process is suspended
 %% until the work is completed or
 %%
-%% > This function must be called by the same process from which
-%% {@link enqueue/2} was made otherwise it will never return.
+%% > The current implementation is not ideal as it recursively reads then status
+%% from the database. So do not abuse it.
+%% > Also at the moment complete tasks are deleted, so the abscense of a task
+%% is considered as either succesful or failed, this will also change as we
+%% will be retaining tasks that are discarded or completed.
+%% > This will be replaced by a pubsub version soon.
 %% @end
 %% -----------------------------------------------------------------------------
--spec yield(WorkRef :: reliable_worker:work_ref()) -> {ok, Status :: status()}.
+-spec yield(WorkRef :: reliable_worker:work_ref()) ->
+    {ok, Payload :: any()} | timeout.
 
 yield(WorkRef) ->
     yield(WorkRef, infinity).
@@ -167,25 +169,25 @@ yield(WorkRef) ->
 %% -----------------------------------------------------------------------------
 %% @doc Returns the value associated with the key `event_payload' when used as
 %% option from a previous {@link enqueue/2} or `timeout' when `Timeout'
-%%  milliseconds has elapsed.
+%% milliseconds has elapsed.
 %%
-%% > This function must be called by the same process from which
-%% {@link enqueue/2} was made otherwise it will never return.
+%% > The current implementation is not ideal as it recursively reads then status
+%% from the database. So do not abuse it.
+%% > Also at the moment complete tasks are deleted, so the abscense of a task
+%% is considered as either succesful or failed, this will also change as we
+%% will be retaining tasks that are discarded or completed.
+%% > This will be replaced by a pubsub version soon.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec yield(WorkRef :: reliable_worker:work_ref(), Timeout :: timeout()) ->
-    {ok, Status :: status()} | timeout.
+    {ok, Payload :: any()} | timeout.
+
+yield(_, Timeout) when Timeout =< 0 ->
+    timeout;
 
 yield(WorkRef, Timeout) ->
-    T0 = erlang:system_time(millisecond),
+    yield(WorkRef, Timeout, undefined).
 
-    receive
-        {gproc_ps_event, reliable_event, #{work_ref := WorkRef} = Event} ->
-            Remaining = Timeout - (erlang:system_time(millisecond) - T0),
-            maybe_yield(WorkRef, Remaining, Event)
-    after
-        Timeout -> timeout
-    end.
 
 
 %% -----------------------------------------------------------------------------
@@ -193,10 +195,26 @@ yield(WorkRef, Timeout) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec status(WorkRef :: reliable_work_ref:t()) ->
-    not_found | {in_progress, Info :: map()} | {failed, Info :: map()}.
+    not_found
+    | {in_progress, Status :: reliable_work:status()}
+    | {failed, Status :: reliable_work:status()}.
 
 status(WorkerRef) ->
     reliable_partition_store:status(WorkerRef).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec status(WorkRef :: reliable_work_ref:t(), Timeout :: timeout()) ->
+    not_found
+    | {in_progress, Status :: reliable_work:status()}
+    | {failed, Status :: reliable_work:status()}.
+
+status(WorkerRef, Timeout) ->
+    reliable_partition_store:status(WorkerRef, Timeout).
+
 
 
 %% -----------------------------------------------------------------------------
@@ -284,6 +302,10 @@ abort(Reason) ->
 %% -----------------------------------------------------------------------------
 %% @doc Equivalent to calling {@link workflow/2} with and empty map passed as
 %% the `Opts' argument.
+%%
+%% > Notice subscriptions are not working at the moment
+%% > See {@link yield/1,2} to track progress.
+%%
 %% @end
 %% -----------------------------------------------------------------------------
 -spec workflow(Fun :: fun(() -> any())) ->
@@ -351,6 +373,10 @@ workflow(Fun) ->
 %% between workflow items scheduled at different nesting levels, unless you
 %% explecitly create those relationships by using the
 %% {@link add_workflow_precedence/2} function.
+%%
+%% > Notice subscriptions are not working at the moment
+%% > See {@link yield/1,2} to track progress.
+%%
 %% @end
 %% -----------------------------------------------------------------------------
 -spec workflow(Fun ::fun(() -> any()), Opts :: opts()) ->
@@ -737,38 +763,52 @@ get_work_id(_) ->
 %% @private
 
 
-maybe_yield(WorkRef, Timeout, #{status := scheduled}) ->
-    case Timeout > 0 of
-        true ->
-            yield(WorkRef, Timeout);
-        false ->
-            ok = unsubscribe(WorkRef),
-            timeout
-    end;
-
-maybe_yield(WorkRef, _, #{status := _} = Event) ->
-    ok = unsubscribe(WorkRef),
-    {ok, Event}.
-
 
 %% @private
-maybe_subscribe(WorkRef, Opts) ->
+maybe_subscribe(_WorkRef, _Opts) ->
     %% This process can only subscribe to one event, otherwise we get an
     %% exception from gproc
-    case maps:get(subscribe, Opts, false) of
-        true ->
-            MS = [{
-                '$1',
-                [{'=:=', {map_get, work_ref, '$1'}, {const, WorkRef}}],
-                [true]
-            }],
-            ok = reliable_event_manager:subscribe(reliable_event, MS),
-            true;
-        false ->
-            false
-    end.
+    %% TODO not supported at the moment till we have distributed pubsub
+    false.
 
 
 %% @private
 unsubscribe(_WorkRef) ->
-    reliable_event_manager:unsubscribe(reliable_event).
+    ok.
+
+
+%% @private
+-spec yield(
+    WorkRef :: reliable_work_ref:t(),
+    Timeout :: integer(),
+    Status :: undefined | reliable_work:status()) ->
+    {ok, Payload :: any()} | {error, not_found}.
+
+yield(WorkRef, Timeout, Status0) ->
+    SleepTime = 2000,
+    T0 = erlang:system_time(millisecond),
+
+    case status(WorkRef) of
+        {in_progress, #{nbr_of_tasks_remaining := N} = Status1} when N > 0 ->
+            ok = yield_sleep(SleepTime, Timeout),
+            T1 = erlang:system_time(millisecond),
+            yield(WorkRef, Timeout - (T1 - T0), Status1);
+        {failed, Status1} ->
+            {ok, maps:get(event_payload, Status1)};
+        {error, not_found} = Error when Status0 == undefined ->
+            Error;
+        {error, not_found} ->
+            %% At the moment a completed or failed Work is removed
+            %% so the absence is regarded as completion
+            %% TODO this will change in the future as we will retain work
+            %% objects
+            {ok, maps:get(event_payload, Status0)}
+    end.
+
+
+%% @private
+yield_sleep(Time, Timeout) when Timeout =< Time ->
+    ok;
+
+yield_sleep(Time, _) ->
+    timer:sleep(Time).
