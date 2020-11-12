@@ -84,6 +84,7 @@
 -export([is_nested_workflow/0]).
 -export([set_workflow_event_payload/1]).
 -export([status/1]).
+-export([status/2]).
 -export([workflow/1]).
 -export([workflow/2]).
 -export([workflow_id/0]).
@@ -195,9 +196,9 @@ yield(WorkRef, Timeout) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec status(WorkRef :: reliable_work_ref:t()) ->
-    not_found
-    | {in_progress, Status :: reliable_work:status()}
-    | {failed, Status :: reliable_work:status()}.
+    {in_progress, Status :: reliable_work:status()}
+    | {failed, Status :: reliable_work:status()}
+    | {error, not_found | any()}.
 
 status(WorkerRef) ->
     reliable_partition_store:status(WorkerRef).
@@ -208,9 +209,9 @@ status(WorkerRef) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec status(WorkRef :: reliable_work_ref:t(), Timeout :: timeout()) ->
-    not_found
-    | {in_progress, Status :: reliable_work:status()}
-    | {failed, Status :: reliable_work:status()}.
+    {in_progress, Status :: reliable_work:status()}
+    | {failed, Status :: reliable_work:status()}
+    | {error, not_found | any()}.
 
 status(WorkerRef, Timeout) ->
     reliable_partition_store:status(WorkerRef, Timeout).
