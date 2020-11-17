@@ -81,10 +81,10 @@ start_link(Name, Bucket) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkRef :: reliable_work:ref()) ->
+-spec status(WorkRef :: reliable_work:ref() | binary()) ->
     {in_progress, Info :: map()}
     | {failed, Info :: map()}
-    | {error, not_found | any()}.
+    | {error, not_found | badref | any()}.
 
 status(WorkRef) ->
     status(WorkRef, 5000).
@@ -94,14 +94,23 @@ status(WorkRef) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkRef :: reliable_work:ref(), Timeout :: timeout()) ->
+-spec status(WorkRef :: reliable_work:ref() | binary(), Timeout :: timeout()) ->
     {in_progress, Info :: map()}
     | {failed, Info :: map()}
-    | {error, not_found | any()}.
+    | {error, not_found, badref | any()}.
+
+status(Bin, Timeout) when is_binary(Bin) ->
+    status(reliable_work_ref:decode(Bin), Timeout);
 
 status(WorkRef, Timeout) ->
-    StoreRef = reliable_work_ref:store_ref(WorkRef),
-    status(StoreRef, WorkRef, Timeout).
+    try reliable_work_ref:store_ref(WorkRef) of
+        StoreRef ->
+            status(StoreRef, WorkRef, Timeout)
+    catch
+        error:badref ->
+            {error, badref}
+    end.
+
 
 
 %% -----------------------------------------------------------------------------

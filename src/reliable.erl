@@ -57,19 +57,27 @@
 
 -type wf_item()         ::  {
                                 Id :: wf_item_id(),
-                                {update | delete, action()}
+                                {update | delete, wf_action()}
                             }.
-
--type action()          ::  reliable_task:new()
-                            | fun(() -> reliable_task:new()).
 -type wf_item_id()      ::  term().
 
+-type wf_action()       ::  reliable_task:new()
+                            | fun(() -> reliable_task:new()).
+-type wf_fun()          ::  fun(() -> wf_fun_result()).
+-type wf_fun_result()   ::  any().
+-type wf_result()       ::  #{
+                                work_id := reliable_work:id(),
+                                work_ref := undefined | reliable_work_ref:t(),
+                                result := wf_fun_result(),
+                                is_nested := boolean()
+                            }.
 
 -export_type([opts/0]).
 -export_type([wf_item/0]).
 -export_type([wf_item_id/0]).
 -export_type([wf_opts/0]).
--export_type([action/0]).
+-export_type([wf_action/0]).
+-export_type([wf_result/0]).
 
 -export([abort/1]).
 -export([add_workflow_items/1]).
@@ -195,10 +203,10 @@ yield(WorkRef, Timeout) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkRef :: reliable_work_ref:t()) ->
+-spec status(WorkRef :: reliable_work_ref:t() | binary()) ->
     {in_progress, Status :: reliable_work:status()}
     | {failed, Status :: reliable_work:status()}
-    | {error, not_found | any()}.
+    | {error, not_found | badref | any()}.
 
 status(WorkerRef) ->
     reliable_partition_store:status(WorkerRef).
@@ -208,10 +216,11 @@ status(WorkerRef) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkRef :: reliable_work_ref:t(), Timeout :: timeout()) ->
+-spec status(
+    WorkRef :: reliable_work_ref:t() | binary(), Timeout :: timeout()) ->
     {in_progress, Status :: reliable_work:status()}
     | {failed, Status :: reliable_work:status()}
-    | {error, not_found | any()}.
+    | {error, not_found | badref | any()}.
 
 status(WorkerRef, Timeout) ->
     reliable_partition_store:status(WorkerRef, Timeout).
@@ -309,9 +318,8 @@ abort(Reason) ->
 %%
 %% @end
 %% -----------------------------------------------------------------------------
--spec workflow(Fun :: fun(() -> any())) ->
-    {ok, ResultOfFun :: any()}
-    | {scheduled, WorkRef :: reliable_work_ref:t(), ResultOfFun :: any()}
+-spec workflow(Fun :: wf_fun()) ->
+    {true | false, wf_result()}
     | {error, Reason :: any()}
     | no_return().
 
@@ -366,7 +374,7 @@ workflow(Fun) ->
 %% multiple times in the case of nested workflows. If you need to conditionally
 %% perform a cleanup operation within the functional object only at the end of
 %% the workflow call, you can use the function `is_nested_workflow/0'
-%% to take a decision.
+%% to make a decision.
 %%
 %% Calls to this function can be nested and the result is exactly the same as it
 %% would without a nested call i.e. nesting workflows does not provide any kind
@@ -374,15 +382,19 @@ workflow(Fun) ->
 %% between workflow items scheduled at different nesting levels, unless you
 %% explecitly create those relationships by using the
 %% {@link add_workflow_precedence/2} function.
+
+%% ?> **Note on Nested workflows**
+%% ?> No final scheduling will be done until the top level workflow is
+%% terminated. So, although a nested worflow returns `{true, Result}', if the
+%% enclosing parent workflow is aborted, the entire nested workflow is aborted.
 %%
 %% > Notice subscriptions are not working at the moment
 %% > See {@link yield/1,2} to track progress.
 %%
 %% @end
 %% -----------------------------------------------------------------------------
--spec workflow(Fun ::fun(() -> any()), Opts :: opts()) ->
-    {ok, ResultOfFun :: any()}
-    | {scheduled, WorkRef :: reliable_work_ref:t(), ResultOfFun :: any()}
+-spec workflow(Fun :: wf_fun(), Opts :: opts()) ->
+    {true | false, wf_result()}
     | {error, Reason :: any()}
     | no_return().
 
@@ -392,13 +404,15 @@ workflow(Fun, Opts) when is_function(Fun, 0) ->
         %% Fun should use this module functions which are workflow aware.
         Result = Fun(),
         case maybe_enqueue_workflow(Opts) of
-            ok ->
-                %%  This is a nested workflow so we do not return
+            {top, true, WorkRef} ->
                 ok = on_terminate(normal, Opts),
-                {ok, Result};
-            {ok, WorkRef} ->
+                {true, worflow_result(Result, WorkRef)};
+            {top, false} ->
                 ok = on_terminate(normal, Opts),
-                {scheduled, WorkRef, Result}
+                {false, worflow_result(Result)};
+            {nested, Boolean} ->
+                ok = on_terminate(normal, Opts),
+                {Boolean, worflow_result(Result)}
         end
     catch
         throw:Reason:Stacktrace ->
@@ -551,7 +565,7 @@ set_workflow_event_payload(Term) ->
 init_workflow(Opts) ->
     case get(?WORKFLOW_ID) of
         undefined ->
-            %% We are initiating a new workflow
+            %% We are initiating a new top workflow
             %% We store the worflow state in the process dictionary
             Id = get_work_id(Opts),
             undefined = put(?WORKFLOW_ID, Id),
@@ -563,6 +577,29 @@ init_workflow(Opts) ->
             ok = increment_nesting_level(),
             ok
     end.
+
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+worflow_result(Result) ->
+    worflow_result(Result, undefined).
+
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+worflow_result(Result, Ref) when is_tuple(Ref) orelse Ref == undefined ->
+    #{
+        work_id => get(?WORKFLOW_ID),
+        work_ref => Ref,
+        result => Result,
+        is_nested => is_nested_workflow()
+    }.
 
 
 %% -----------------------------------------------------------------------------
@@ -593,12 +630,17 @@ decrement_nested_count() ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec maybe_enqueue_workflow(Opts :: map()) ->
-    ok | {ok, WorkRef :: reliable_work_ref:t()} | no_return().
+    {top, true, WorkRef :: reliable_work_ref:t()}
+    | {top | nested, boolean()}
+    | no_return().
 
 maybe_enqueue_workflow(Opts) ->
     case is_nested_workflow() of
         true ->
-            ok;
+            %% TODO We should be returning false if there where no tasks
+            %% scheduled at this nesting level BUT we currently do not track
+            %% tasks by level, so we cannot tell right now.
+            {nested, true};
         false ->
             enqueue_workflow(Opts)
     end.
@@ -610,22 +652,22 @@ maybe_enqueue_workflow(Opts) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec enqueue_workflow(Opts :: map()) ->
-    ok
-    | {ok, WorkRef :: reliable_work_ref:t()}
+    {top, true, WorkRef :: reliable_work_ref:t()}
+    | {top, false}
     | no_return().
 
 enqueue_workflow(Opts) ->
     case prepare_tasks() of
         {ok, []} ->
-            ok;
+            {top, false};
         {ok, Tasks} ->
             NewOpts = Opts#{
                 work_id => get(?WORKFLOW_ID),
                 event_payload => get_workflow_event_payload()
             },
             case enqueue(Tasks, NewOpts) of
-                {ok, _} = OK ->
-                    OK;
+                {ok, WorkRef} ->
+                    {top, true, WorkRef};
                 {error, Reason} ->
                     throw(Reason)
             end;
@@ -790,7 +832,7 @@ yield(WorkRef, Timeout, Status0) ->
     T0 = erlang:system_time(millisecond),
 
     case status(WorkRef) of
-        {in_progress, #{nbr_of_tasks_remaining := N} = Status1} when N > 0 ->
+        {in_progress, Status1} ->
             ok = yield_sleep(SleepTime, Timeout),
             T1 = erlang:system_time(millisecond),
             yield(WorkRef, Timeout - (T1 - T0), Status1);
@@ -803,7 +845,9 @@ yield(WorkRef, Timeout, Status0) ->
             %% so the absence is regarded as completion
             %% TODO this will change in the future as we will retain work
             %% objects
-            {ok, maps:get(event_payload, Status0)}
+            {ok, maps:get(event_payload, Status0)};
+        {error, Reason} ->
+            error(Reason)
     end.
 
 

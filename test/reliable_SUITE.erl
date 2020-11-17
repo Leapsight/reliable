@@ -106,7 +106,7 @@ index_test(_Config) ->
 
 
 workflow_do_nothing_test(_) ->
-    {ok, foo} = reliable:workflow(fun() -> foo end).
+    {false, #{result := foo}} = reliable:workflow(fun() -> foo end).
 
 
 workflow_error_test(_) ->
@@ -147,7 +147,8 @@ workflow_1_test(_) ->
         ok
     end,
 
-    {scheduled, WorkRef, ok} = reliable:workflow(Fun, #{subscribe => true}),
+    {true, Result} = reliable:workflow(Fun, #{subscribe => true}),
+    #{result := ok, work_ref := WorkRef} = Result,
     %% {ok, Event} = reliable:yield(WorkRef, 5000),
     %% ?assertEqual(completed, maps:get(status, Event)),
     %% ?assertEqual(WorkRef, maps:get(work_ref, Event)),

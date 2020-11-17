@@ -32,6 +32,8 @@
 -export([work_id/1]).
 -export([is_type/1]).
 -export([store_ref/1]).
+-export([encode/1]).
+-export([decode/1]).
 
 
 
@@ -82,3 +84,36 @@ work_id(#reliable_work_ref{work_id = Val}) ->
 store_ref(#reliable_work_ref{store_ref = Val}) ->
     Val.
 
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec encode(t()) -> binary().
+
+encode(#reliable_work_ref{store_ref = Ref, work_id = Id}) ->
+    A = atom_to_binary(Ref, utf8),
+    <<A/binary, $\31, Id/binary>>.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec decode(binary()) -> t().
+
+decode(Bin) ->
+    case binary:split(Bin, <<$\31>>) of
+        [BinRef, Id] ->
+            try
+                Ref = binary_to_existing_atom(BinRef, utf8),
+                #reliable_work_ref{work_id = Id, store_ref = Ref}
+            catch
+                _:badarg ->
+                    %% Either not a valid value or the reference no longer
+                    %% exists
+                    error(badref)
+            end;
+        _ ->
+            error(badarg)
+    end.
