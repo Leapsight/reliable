@@ -1,5 +1,5 @@
 {application, reliable, [
-    {description, "An OTP application"},
+    {description, "Reliable is an open source Erlang/OTP application that ensures a sequence of write and/or delete operations in Riak KV are guaranteed to eventually occur, and occur in order."},
     {vsn, "0.1.0"},
     {registered, []},
     {mod, {reliable_app, []}},
@@ -19,5 +19,9 @@
     {env,[]},
     {modules, []},
     {licenses, ["Apache 2.0"]},
-    {links, []}
+    {links, [
+        {"Website", "https://www.leapsight.com"},
+        {"Gitlab", "https://gitlab.com/leapsight/reliable"},
+        {"Documentation", "https://leapsight.gitlab.io/reliable/#/"}
+    ]}
  ]}.
