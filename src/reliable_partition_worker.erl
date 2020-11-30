@@ -24,13 +24,24 @@
 
 -author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
 
+
+
 -record(state, {
     store_ref               ::  atom(),
     bucket                  ::  binary(),
     symbolics               ::  dict:dict(),
     fetch_backoff           ::  backoff:backoff() | undefined,
-    fetch_timer_ref         ::  reference() | undefined
+    fetch_timer_ref         ::  reference() | undefined,
+    work_state              ::  work_state() | undefined
 }).
+
+-type work_state()          ::  #{
+    work            :=  reliable_work:t(),
+    last_ok         :=  boolean(),
+    completed       :=  [reliable_task:t()],
+    nbr_of_tasks    :=  non_neg_integer(),
+    count           :=  non_neg_integer()
+}.
 
 
 %% API
@@ -73,13 +84,13 @@ init([StoreRef, Bucket]) ->
     Conn = get_db_connection(),
     %% Initialize symbolic variable dict.
     Symbolics = dict:store(riakc, Conn, dict:new()),
-
-    State = #state{
+    State0 = #state{
         store_ref = StoreRef,
         bucket = Bucket,
         symbolics = Symbolics
     },
-    {ok, State, {continue, schedule_work}}.
+    State1 = reset_work_state(State0),
+    {ok, State1, {continue, schedule_work}}.
 
 
 handle_continue(schedule_work, State0) ->
@@ -105,14 +116,14 @@ handle_cast(Msg, State) ->
 
 
 handle_info(
-    {timeout, Ref, fetch_work}, #state{fetch_timer_ref = Ref} = State) ->
-    try process_work(State) of
-        ok ->
-            State1 = schedule_work(succeed, State),
-            {noreply, State1}
+    {timeout, Ref, fetch_work}, #state{fetch_timer_ref = Ref} = State0) ->
+    try process_work(State0) of
+        {ok, State1} ->
+            State = schedule_work(succeed, State1),
+            {noreply, State}
     catch
         error:Reason when Reason == overload orelse Reason == timeout ->
-            State1 = schedule_work(fail, State),
+            State1 = schedule_work(fail, State0),
             {noreply, State1}
     end;
 
@@ -204,61 +215,60 @@ process_work(State) ->
     StoreRef = State#state.store_ref,
     Bucket = State#state.bucket,
 
-    ?LOG_DEBUG(#{
-        message => "Fetching work.",
+    LogCtxt = #{
         pid => self(),
         partition => Bucket
-    }),
+    },
 
-    %% Iterate through work that needs to be done.
-    %%
-    %% Probably inserting when holding the iterator is a problem too?
-    %% Not sure. I'm assuming not for now since yielding the same item (insert
-    %% case)
-    %% is not as bad as skipping an item (delete case.)
-
-    %% We do not use the continuation, we simply query again on the next
-    %% scheduled run.
+    ?LOG_DEBUG(LogCtxt#{message => "Fetching work"}),
 
     %% We retrieve the work list from the partition store server
+
     Opts = #{max_results => 100},
     {WorkList, _Cont} = reliable_partition_store:list(StoreRef, Opts),
-    {Completed, State} = lists:foldl(fun process_work/2, {[], State}, WorkList),
 
-    ?LOG_DEBUG(#{
-        pid => self(),
+    %% Iterate through work that needs to be done.
+    %% We do not use the continuation, we simply query again on the next
+    %% scheduled run.
+    Acc = {[], State},
+    {Completed, State1} = lists:foldl(fun process_work/2, Acc, WorkList),
+
+    ?LOG_DEBUG(LogCtxt#{
         message => "Completed work",
         work_ids => Completed
     }),
 
-    ok.
+    {ok, State1}.
 
 
 %% @private
-process_work(Work, {Acc, State}) ->
+process_work(Work, {Acc, State0}) ->
+    StoreRef = State0#state.store_ref,
+    Bucket = State0#state.bucket,
     WorkId = reliable_work:id(Work),
-    Tasks = reliable_work:tasks(Work),
-    ?LOG_DEBUG(#{
+    Payload = reliable_work:event_payload(Work),
+    N = reliable_work:nbr_of_tasks(Work),
+
+    LogCtxt = #{
         pid => self(),
-        message => "Found work to be performed",
-        work_id => WorkId
-    }),
+        work_id => WorkId,
+        partition => Bucket,
+        event_payload => Payload,
+        nbr_of_tasks => N
+    },
+
+    ?LOG_DEBUG(LogCtxt#{message => "Performing work"}),
 
     %% Only remove the work when all of the work items are done.
-    ItemAcc = {true, [], Work, State},
-
-    case lists:foldl(fun process_tasks/2, ItemAcc, Tasks) of
-        {true, _, _, _} ->
+    case do_process_work(Work, State0) of
+        #state{work_state = #{last_ok := true}} = State1 ->
             %% We made it through the entire list with a result for
-            %% everything, remove.
-            StoreRef = State#state.store_ref,
-            Bucket = State#state.bucket,
-
-            ?LOG_DEBUG(#{
-                pid => self(),
-                message => "Work completed, attempting delete from store",
-                work_id => WorkId,
-                partition => Bucket
+            %% everything.
+            %% At the moment we are removing but we should update instead and
+            %% let the store backend decide where to store the completed
+            %% work so that users can check and report.
+            ?LOG_DEBUG(LogCtxt#{
+                message => "Work completed, attempting delete from store"
             }),
 
             ok = reliable_partition_store:delete(StoreRef, WorkId),
@@ -270,27 +280,58 @@ process_work(Work, {Acc, State}) ->
                 payload => Payload
             }},
             ok = reliable_event_manager:notify(Event),
-            {Acc ++ [WorkId], State};
-        {false, _, _, _} ->
-            ?LOG_DEBUG(#{
-                message => "Work NOT YET completed",
-                work_id => WorkId
-            }),
-            {Acc, State}
+            {Acc ++ [WorkId], State1};
+        #state{work_state = #{last_ok := false}} = State1 ->
+            ?LOG_DEBUG(LogCtxt#{message => "Work NOT YET completed"}),
+            {Acc, State1}
     end.
 
 
 %% @private
-process_tasks(Last, {false, Completed, Work, State}) ->
+reset_work_state(State) ->
+    WorkState = #{
+        last_ok => true,
+        work => undefined,
+        completed => [],
+        count => 0,
+        nbr_of_tasks => 0
+    },
+    State#state{work_state = WorkState}.
+
+
+%% @private
+do_process_work(Work, State0) ->
+    Tasks = reliable_work:tasks(Work),
+    WorkState = #{
+        last_ok => true,
+        work => Work,
+        completed => [],
+        nbr_of_tasks => length(Tasks),
+        count => 0
+    },
+    State = State0#state{work_state = WorkState},
+    lists:foldl(fun process_tasks/2, State, Tasks).
+
+
+%% @private
+process_tasks(Last, #state{work_state = #{last_ok := false} = WS0} = State) ->
+    Work = maps:get(work, WS0),
     %% Don't iterate if the last item wasn't completed.
     ?LOG_INFO(#{
         message => "Not attempting next item, since last failed.",
         work_id => reliable_work:id(Work)
     }),
-    {false, Completed ++ [Last], Work, State};
+    WS1 = WS0#{
+        count => maps:get(count, WS0) + 1,
+        completed => maps:get(completed, WS0) ++ [Last]
+    },
+    State#state{work_state = WS1};
 
-process_tasks(
-    {TaskId, Task0} = Last, {true, Completed, Work, State}) ->
+
+process_tasks(Last, #state{work_state = #{last_ok := true} = WS0} = State) ->
+    {TaskId, Task0} = Last,
+    Work = maps:get(work, WS0),
+
     ?LOG_DEBUG(#{
         message => "Found task to be performed.",
         work_id => reliable_work:id(Work),
@@ -300,17 +341,35 @@ process_tasks(
 
     case reliable_task:result(Task0) of
         undefined ->
-            {Bool, NewWork} = do_process_task({TaskId, Task0}, Work, State),
-            {Bool, Completed ++ [Last], NewWork, State};
+            {Bool, NewWork} = do_process_task({TaskId, Task0}, State),
+            WS1 = WS0#{
+                last_ok => Bool,
+                count => maps:get(count, WS0) + 1,
+                completed => maps:get(completed, WS0) ++ [Last],
+                work => NewWork
+            },
+            State#state{work_state = WS1};
         _ ->
-            {true, Completed ++ [Last], Work, State}
+            %% Task already had a result, it was processed before
+            WS1 = WS0#{
+                last_ok => true,
+                count => maps:get(count, WS0) + 1,
+                completed => maps:get(completed, WS0) ++ [Last]
+            },
+            State#state{work_state = WS1}
     end.
 
 
-do_process_task({TaskId, Task0}, Work, State) ->
+
+do_process_task({TaskId, Task0}, State) ->
     %% Destructure work to be performed.
+    #{work := Work} = State#state.work_state,
     StoreRef = State#state.store_ref,
-    WorkId = reliable_work:id(Work),
+
+    LogCtxt = #{
+        work_id => reliable_work:id(Work),
+        task_id => TaskId
+    },
 
     %% Attempt to perform task.
     try
@@ -319,7 +378,7 @@ do_process_task({TaskId, Task0}, Work, State) ->
         Function = reliable_task:function(Task0),
         Args = replace_symbolics(reliable_task:args(Task0), State),
 
-        ?LOG_DEBUG(#{
+        ?LOG_DEBUG(LogCtxt#{
             message => "Trying to perform task",
             task => Task0,
             node => Node,
@@ -329,41 +388,70 @@ do_process_task({TaskId, Task0}, Work, State) ->
         }),
 
         Result = rpc:call(Node, Module, Function, Args),
+
         Task1 = reliable_task:set_result(Result, Task0),
 
-        ?LOG_DEBUG(#{
+        ?LOG_DEBUG(LogCtxt#{
             message => "Task result",
-            work_id => WorkId,
-            task_id => TaskId,
             result => Result
         }),
 
         %% Update task
         NewWork = reliable_work:update_task(TaskId, Task1, Work),
 
-        case reliable_partition_store:update(StoreRef, NewWork) of
-            ok ->
-                ?LOG_DEBUG(#{
-                    message => "Updated work",
-                    work_id => WorkId
+        case maybe_update(StoreRef, NewWork, State) of
+            true ->
+                ?LOG_DEBUG(LogCtxt#{message => "Work updated in store"}),
+                {true, NewWork};
+            false ->
+                ?LOG_DEBUG(LogCtxt#{
+                    message => "Updating work in store delayed"
                 }),
                 {true, NewWork};
             {error, Reason} ->
-                ?LOG_DEBUG(#{
-                    message => "Writing failed",
-                    work_id => WorkId,
-                    reason => Reason
-                }),
-                {false, Work}
+                throw(Reason)
         end
     catch
-        _:EReason:Stacktrace ->
-            ?LOG_ERROR(#{
-                message => "Got exception",
+        throw:EReason ->
+            ?LOG_DEBUG(LogCtxt#{
+                message => "Updating work in store failed",
+                reason => EReason
+            }),
+            {false, Work};
+        Class:EReason:Stacktrace ->
+            ?LOG_ERROR(LogCtxt#{
+                message => "Exception while performing task",
                 reason => EReason,
+                class => Class,
                 stacktrace => Stacktrace
             }),
             {false, Work}
+    end.
+
+
+%% @private
+maybe_update(StoreRef, Work, State) ->
+    WS = State#state.work_state,
+    Count = maps:get(count, WS),
+    N = maps:get(nbr_of_tasks, WS),
+    Divisor = trunc(math:log2(max(2, N))),
+
+    %% We use log2 as a simple flow control mechanism, to avoid writing to
+    %% store for every task update. For example, this will result in:
+    %% 1 write when N = 1
+    %% 2 writes when N = 5
+    %% 3 writes when N = 100
+    %% 16 writes when N = 100
+    %% 111 writes when N = 1000
+    %% Plus the final write when the whole work is finished
+    case Count rem Divisor == 0 of
+        true ->
+            case reliable_partition_store:update(StoreRef, Work) of
+                ok -> true;
+                Error -> Error
+            end;
+        false ->
+            false
     end.
 
 

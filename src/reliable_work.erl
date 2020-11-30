@@ -30,6 +30,7 @@
 -export([new/3]).
 -export([ref/2]).
 -export([tasks/1]).
+-export([nbr_of_tasks/1]).
 -export([update_task/3]).
 -export([status/1]).
 
@@ -185,6 +186,16 @@ when is_integer(Order) andalso Order > 0 ->
 
 tasks(#reliable_work{tasks = Val}) ->
     maps:to_list(Val).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec nbr_of_tasks(t()) -> [{order(), reliable_task:t()}].
+
+nbr_of_tasks(#reliable_work{tasks = Val}) ->
+    maps:size(Val).
 
 
 %% -----------------------------------------------------------------------------
