@@ -252,7 +252,7 @@ ensure_in_workflow() ->
 
 %% -----------------------------------------------------------------------------
 %% @doc Returns the current worflow nesting level.
-%% Fails with a `no_workflow' exception if this function is not called withihn
+%% Fails with a `no_workflow' exception if this function is not called within
 %% a worflow context.
 %% @end
 %% -----------------------------------------------------------------------------
