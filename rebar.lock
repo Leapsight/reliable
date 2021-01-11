@@ -22,13 +22,14 @@
        {ref,"a5016017edd1e99d46c9a6d4c348cb818e542b13"}},
   0},
  {<<"pooler">>,{pkg,<<"pooler">>,<<"1.5.3">>},1},
+ {<<"prometheus">>,{pkg,<<"prometheus">>,<<"4.6.0">>},1},
  {<<"riak_pb">>,
   {git,"https://github.com/basho/riak_pb",
        {ref,"08771aba2ce4935b715d32d1b92555efdc3da994"}},
   1},
  {<<"riak_pool">>,
   {git,"https://gitlab.com/leapsight/riak_pool.git",
-       {ref,"d9e3ea67a9843f25e660ed42d2c0f8bf4174f5ef"}},
+       {ref,"55dad71ff460c370c90c827a21fe8f6af2d5f8c7"}},
   0},
  {<<"riakc">>,
   {git,"git://github.com/basho/riak-erlang-client.git",
@@ -38,9 +39,11 @@
 {pkg_hash,[
  {<<"backoff">>, <<"83B72ED2108BA1EE8F7D1C22E0B4A00CFE3593A67DBC792799E8CCE9F42F796B">>},
  {<<"gproc">>, <<"CEA02C578589C61E5341FCE149EA36CCEF236CC2ECAC8691FBA408E7EA77EC2F">>},
- {<<"pooler">>, <<"898CD1FA301FC42D4A8ED598CE139B71CA85B54C16AB161152B5CC5FBDCFA1A8">>}]},
+ {<<"pooler">>, <<"898CD1FA301FC42D4A8ED598CE139B71CA85B54C16AB161152B5CC5FBDCFA1A8">>},
+ {<<"prometheus">>, <<"20510F381DB1CCAB818B4CF2FAC5FA6AB5CC91BC364A154399901C001465F46F">>}]},
 {pkg_hash_ext,[
  {<<"backoff">>, <<"CF0CFFF8995FB20562F822E5CC47D8CCF664C5ECDC26A684CBE85C225F9D7C39">>},
  {<<"gproc">>, <<"580ADAFA56463B75263EF5A5DF4C86AF321F68694E7786CB057FD805D1E2A7DE">>},
- {<<"pooler">>, <<"058D85C5081289B90E97E4DDDBC3BB5A3B4A19A728AB3BC88C689EFCC36A07C7">>}]}
+ {<<"pooler">>, <<"058D85C5081289B90E97E4DDDBC3BB5A3B4A19A728AB3BC88C689EFCC36A07C7">>},
+ {<<"prometheus">>, <<"4905FD2992F8038ECCD7AA0CD22F40637ED618C0BED1F75C05AACEC15B7545DE">>}]}
 ].

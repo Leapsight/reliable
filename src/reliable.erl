@@ -348,9 +348,8 @@ workflow(Fun) ->
 %% returns the tuple `{error, Reason}'.
 %%
 %% If everything goes well, the function returns the tuple
-%% `{ok, {WorkId, ResultOfFun}}' where `WorkId' is the identifier for the
-%% workflow scheduled by Reliable and `ResultOfFun' is the value of the last
-%% expression in `Fun'.
+%% `{Flag, Result}}' where `Flag' is a boolean denoting whether a workflow was
+%% scheduled or not, and Result is a `reliable:wf_result()' structure.
 %%
 %% > Notice that calling this function schedules the work to Reliable, you need
 %% to use the WorkId to check with Reliable the status of the workflow
