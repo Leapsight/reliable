@@ -74,7 +74,7 @@
     {ok, pid()} | {error, Reason :: any()}.
 
 start_link(Name, Bucket) ->
-    gen_server:start({local, Name}, ?MODULE, [Bucket], []).
+    gen_server:start_link({local, Name}, ?MODULE, [Bucket], []).
 
 
 %% -----------------------------------------------------------------------------

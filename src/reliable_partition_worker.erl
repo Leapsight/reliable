@@ -23,6 +23,7 @@
 -include_lib("kernel/include/logger.hrl").
 
 -author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
+-author("Alejandro Ramallo <alejandro.ramallo@leapsight.com>").
 
 
 
@@ -68,7 +69,7 @@
     {ok, pid()} | {error, any()}.
 
 start_link(WorkerName, StoreRef, Bucket) ->
-    gen_server:start({local, WorkerName}, ?MODULE, [StoreRef, Bucket], []).
+    gen_server:start_link({local, WorkerName}, ?MODULE, [StoreRef, Bucket], []).
 
 
 
@@ -223,13 +224,12 @@ process_work(State) ->
     ?LOG_DEBUG(LogCtxt#{message => "Fetching work"}),
 
     %% We retrieve the work list from the partition store server
-
+    %% We ignore the continuation, we simply query again on the next
+    %% scheduled run.
     Opts = #{max_results => 100},
     {WorkList, _Cont} = reliable_partition_store:list(StoreRef, Opts),
 
     %% Iterate through work that needs to be done.
-    %% We do not use the continuation, we simply query again on the next
-    %% scheduled run.
     Acc = {[], State},
     {Completed, State1} = lists:foldl(fun process_work/2, Acc, WorkList),
 
@@ -264,8 +264,8 @@ process_work(Work, {Acc, State0}) ->
         #state{work_state = #{last_ok := true}} = State1 ->
             %% We made it through the entire list with a result for
             %% everything.
-            %% At the moment we are removing but we should update instead and
-            %% let the store backend decide where to store the completed
+            %% TODO At the moment we are removing but we should update instead
+            %% and let the store backend decide where to store the completed
             %% work so that users can check and report.
             ?LOG_DEBUG(LogCtxt#{
                 message => "Work completed, attempting delete from store"
