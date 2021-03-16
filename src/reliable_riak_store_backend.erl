@@ -86,11 +86,11 @@ enqueue(Ref, Bucket, Work) ->
     PoolOpts = #{timeout => 10000},
 
     case riak_pool:execute(Ref, Fun, PoolOpts) of
-        {true, ok} ->
-            ok;
-        {false, Reason} ->
+        {ok, Result} ->
+            Result;
+        {error, _} = Error ->
             %% If busy do retries
-            {error, Reason}
+            Error
     end.
 
 
@@ -109,10 +109,11 @@ get(Ref, Bucket, WorkId) ->
     PoolOpts = #{timeout => 10000},
 
     case riak_pool:execute(Ref, Fun, PoolOpts) of
-        {true, Res} ->
-            Res;
-        {false, Reason} ->
-            {error, Reason}
+        {ok, Result} ->
+            Result;
+        {error, _} = Error ->
+            %% If busy do retries
+            Error
     end.
 
 
@@ -137,10 +138,11 @@ delete(Ref, Bucket, WorkId) when is_atom(Ref) ->
     PoolOpts = #{timeout => 10000},
 
     case riak_pool:execute(Ref, Fun, PoolOpts) of
-        {true, Res} ->
-            Res;
-        {false, Reason} ->
-            {error, Reason}
+        {ok, Result} ->
+            Result;
+        {error, _} = Error ->
+            %% If busy do retries
+            Error
     end.
 
 
@@ -166,10 +168,11 @@ delete_all(Ref, Bucket, WorkIds) ->
     PoolOpts = #{timeout => 10000},
 
     case riak_pool:execute(Ref, Fun, PoolOpts) of
-        {true, Res} ->
-            Res;
-        {false, Reason} ->
-            {error, Reason}
+        {ok, Result} ->
+            Result;
+        {error, _} = Error ->
+            %% If busy do retries
+            Error
     end.
 
 
@@ -203,10 +206,11 @@ update(Ref, Bucket, Work) ->
     PoolOpts = #{timeout => 10000},
 
     case riak_pool:execute(Ref, Fun, PoolOpts) of
-        {true, Res} ->
-            Res;
-        {false, Reason} ->
-            {error, Reason}
+        {ok, Result} ->
+            Result;
+        {error, _} = Error ->
+            %% If busy do retries
+            Error
     end.
 
 
@@ -237,10 +241,11 @@ count(Ref, Bucket, Opts) ->
 
     PoolOpts = #{timeout => 10000},
     case riak_pool:execute(Ref, Fun, PoolOpts) of
-        {true, Res} ->
-            Res;
-        {false, Reason} ->
-            {error, Reason}
+        {ok, Result} ->
+            Result;
+        {error, _} = Error ->
+            %% If busy do retries
+            Error
     end.
 
 
@@ -329,14 +334,14 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
     PoolOpts = #{timeout => 10000},
 
     case riak_pool:execute(Ref, Fun, PoolOpts) of
-        {true, Res} ->
-            Res;
-        {false, Reason} ->
+        {ok, Result} ->
+            Result;
+        {error, Reason} = Error ->
             ?LOG_INFO(
                 "Could not retrieve work from store; reason=~p",
                 [Reason]
             ),
-            {error, Reason}
+            Error
     end.
 
 
