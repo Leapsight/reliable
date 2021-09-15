@@ -315,8 +315,8 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
                             ?LOG_DEBUG("got work: ~p", [Work]),
                             Function({Key, Work}, Acc1);
                         {error, Reason} ->
-                            ?LOG_ERROR(
-                                "Error while retrieving work from store; "
+                            ?LOG_WARNING(
+                                "Could not retrieve work from store (it can well be a stale Riak KV Secondary index); "
                                 "backend=~p, reason=~p, partition=~p, key=~p",
                                 [?MODULE, Reason, Bucket, Key]
                             ),
