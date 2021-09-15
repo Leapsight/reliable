@@ -257,13 +257,18 @@ count(Ref, Bucket, Opts) ->
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: {[reliable_work:t()], Continuation :: continuation()}
+    List :: {ok, [reliable_work:t()], Continuation :: continuation()}
     | {error, Reason :: any()}.
 
 list(Ref, Bucket, Opts) ->
     Fun = fun({_K, V}, Acc) -> [V | Acc] end,
-    {L, Cont} = fold(Ref, Bucket, Fun, [], Opts),
-    {lists:reverse(L), Cont}.
+
+    case fold(Ref, Bucket, Fun, [], Opts) of
+        {ok, {L, Cont}} ->
+            {ok, {lists:reverse(L), Cont}};
+        {error, _} = Error ->
+            Error
+    end.
 
 
 %% -----------------------------------------------------------------------------
@@ -288,7 +293,7 @@ flush(Ref, Bucket) ->
     Fun :: function(),
     Acc :: any(),
     Opts :: map()) ->
-    {NewAcc :: any(), Continuation :: continuation()}
+    {ok, {NewAcc :: any(), Continuation :: continuation()}}
     | {error, Reason :: any()}.
 
 fold(Ref, Bucket, Function, Acc, Opts) ->
@@ -323,8 +328,7 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
                             Acc1
                     end
                 end,
-                Result = lists:foldl(FoldFun, Acc, Keys),
-                {Result, Cont1};
+                {lists:foldl(FoldFun, Acc, Keys), Cont1};
             {error, Reason} ->
                 {error, format_reason(Reason)}
         end
@@ -335,7 +339,7 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
 
     case riak_pool:execute(Ref, Fun, PoolOpts) of
         {ok, Result} ->
-            Result;
+            {ok, Result};
         {error, Reason} = Error ->
             ?LOG_INFO(
                 "Could not retrieve work from store; reason=~p",
@@ -445,9 +449,9 @@ flush(Ref, Bucket, Opts) ->
     end,
 
     try fold(Ref, Bucket, Fun, ok, Opts) of
-        {ok, undefined} ->
+        {ok, {ok, undefined}} ->
             ok;
-        {ok, Cont} ->
+        {ok, {ok, Cont}} ->
             flush(Ref, Bucket, Opts#{continuation => Cont})
     catch
         throw:Reason ->
