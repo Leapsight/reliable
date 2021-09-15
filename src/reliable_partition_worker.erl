@@ -211,10 +211,10 @@ schedule_work(fail, #state{fetch_backoff = B0} = State) ->
 
 
 %% @private
-process_work(State) ->
+process_work(State0) ->
 
-    StoreRef = State#state.store_ref,
-    Bucket = State#state.bucket,
+    StoreRef = State0#state.store_ref,
+    Bucket = State0#state.bucket,
 
     LogCtxt = #{
         pid => self(),
@@ -227,18 +227,31 @@ process_work(State) ->
     %% We ignore the continuation, we simply query again on the next
     %% scheduled run.
     Opts = #{max_results => 100},
-    {WorkList, _Cont} = reliable_partition_store:list(StoreRef, Opts),
+    case reliable_partition_store:list(StoreRef, Opts) of
+        {ok, {WorkList, _Cont}} ->
+            %% Iterate through work that needs to be done.
+            {Completed, State1} = lists:foldl(
+                fun process_work/2,
+                {[], State0},
+                WorkList
+            ),
 
-    %% Iterate through work that needs to be done.
-    Acc = {[], State},
-    {Completed, State1} = lists:foldl(fun process_work/2, Acc, WorkList),
+            ?LOG_DEBUG(LogCtxt#{
+                message => "Completed work",
+                work_ids => Completed
+            }),
+            {ok, State1};
 
-    ?LOG_DEBUG(LogCtxt#{
-        message => "Completed work",
-        work_ids => Completed
-    }),
+        {error, Reason} ->
+            %% We will try later
+            ?LOG_ERROR(LogCtxt#{
+                message => "Failed when listing work",
+                store => StoreRef,
+                reason => Reason
+            }),
+            {ok, State0}
+    end.
 
-    {ok, State1}.
 
 
 %% @private
