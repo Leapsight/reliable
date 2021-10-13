@@ -328,7 +328,7 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
                             Acc1
                     end
                 end,
-                {lists:foldl(FoldFun, Acc, Keys), Cont1};
+                {ok, {lists:foldl(FoldFun, Acc, Keys), Cont1}};
             {error, Reason} ->
                 {error, format_reason(Reason)}
         end
@@ -338,8 +338,10 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
     PoolOpts = #{timeout => 10000},
 
     case riak_pool:execute(Ref, Fun, PoolOpts) of
-        {ok, Result} ->
-            {ok, Result};
+        {ok, {ok, _} = OK} ->
+            OK;
+        {ok, {error, _} = Error} ->
+            Error;
         {error, Reason} = Error ->
             ?LOG_INFO(
                 "Could not retrieve work from store; reason=~p",
