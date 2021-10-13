@@ -120,11 +120,11 @@ status(WorkRef, Timeout) ->
 -spec status(StoreRef :: atom(), WorkRef :: reliable_work:ref(), timeout()) ->
     {in_progress, Info :: map()}
     | {failed, Info :: map()}
-    | {error, not_found | any()}.
+    | {error, not_found | timeout | any()}.
 
 status(StoreRef, WorkRef, Timeout) when is_atom(StoreRef) ->
     WorkId = reliable_work_ref:work_id(WorkRef),
-    gen_server:call(StoreRef, {status, WorkId}, Timeout).
+    safe_call(StoreRef, {status, WorkId}, Timeout).
 
 
 %% -----------------------------------------------------------------------------
@@ -132,7 +132,7 @@ status(StoreRef, WorkRef, Timeout) when is_atom(StoreRef) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec enqueue(StoreRef :: atom(), Work :: reliable_work:t()) ->
-    {ok, reliable_work:ref()} | {error, term()}.
+    {ok, reliable_work:ref()} | {error, timeout | any()}.
 
 enqueue(StoreRef, Work) ->
     enqueue(StoreRef, Work, 30000).
@@ -144,22 +144,21 @@ enqueue(StoreRef, Work) ->
 %% -----------------------------------------------------------------------------
 -spec enqueue(
     StoreRef :: atom(), Work :: reliable_work:t(), Timeout :: timeout()) ->
-    {ok, reliable_work:ref()} | {error, term()}.
+    {ok, reliable_work:ref()} | {error, timeout | any()}.
 
 enqueue(StoreRef, Work, Timeout) when is_atom(StoreRef) ->
     case reliable_work:is_type(Work) of
         true ->
-            gen_server:call(StoreRef, {enqueue, StoreRef, Work}, Timeout);
+            safe_call(StoreRef, {enqueue, StoreRef, Work}, Timeout);
         false ->
             {error, {badarg, Work}}
     end.
-
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec flush_all() -> ok | {error, Reason :: any()}.
+-spec flush_all() -> ok | {error, Reason :: timeout | any()}.
 
 flush_all() ->
     Stores = supervisor:which_children(reliable_partition_store_sup),
@@ -196,10 +195,10 @@ flush(StoreRef) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec flush(StoreRef :: atom(), Timeout :: timeout()) ->
-    ok | {error, Reason :: any()}.
+    ok | {error, Reason :: timeout | any()}.
 
 flush(StoreRef, Timeout) ->
-    gen_server:call(StoreRef, flush, Timeout).
+    safe_call(StoreRef, flush, Timeout).
 
 
 %% -----------------------------------------------------------------------------
@@ -218,10 +217,11 @@ list(StoreRef, Opts) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec list(StoreRef :: atom(), Opts :: map(), Timeout :: timeout()) ->
-    {[reliable_work:t()], Continuation :: any()} | {error, Reason :: any()}.
+    {ok, {[reliable_work:t()], Continuation :: any()}}
+    | {error, Reason :: timeout | any()}.
 
 list(StoreRef, Opts, Timeout) ->
-    gen_server:call(StoreRef, {list, Opts}, Timeout).
+    safe_call(StoreRef, {list, Opts}, Timeout).
 
 
 %% -----------------------------------------------------------------------------
@@ -229,7 +229,7 @@ list(StoreRef, Opts, Timeout) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec count(StoreRef :: atom()) ->
-    Count :: integer() | {error, Reason :: any()}.
+    Count :: integer() | {error, Reason :: timeout | any()}.
 
 count(StoreRef) ->
     count(StoreRef, 30000).
@@ -240,10 +240,10 @@ count(StoreRef) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec count(StoreRef :: atom(), Timeout :: timeout()) ->
-    {[reliable_work:t()], Continuation :: any()}.
+    {[reliable_work:t()], Continuation :: timeout | any()}.
 
 count(StoreRef, Timeout) ->
-    gen_server:call(StoreRef, {count, Timeout}, Timeout + 100).
+    safe_call(StoreRef, {count, Timeout}, Timeout + 100).
 
 
 %% -----------------------------------------------------------------------------
@@ -263,12 +263,12 @@ update(StoreRef, Work) ->
 %% -----------------------------------------------------------------------------
 -spec update(
     StoreRef :: atom(), Work :: reliable_work:t(), Timeout :: timeout()) ->
-    ok | {error, Reason :: any()}.
+    ok | {error, Reason :: timeout | any()}.
 
 update(StoreRef, Work, Timeout) ->
     case reliable_work:is_type(Work) of
         true ->
-            gen_server:call(StoreRef, {update, Work}, Timeout);
+            safe_call(StoreRef, {update, Work}, Timeout);
         false ->
             error({badarg, Work})
     end.
@@ -279,7 +279,7 @@ update(StoreRef, Work, Timeout) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec delete(StoreRef :: atom(), WorkId :: reliable_work:id()) ->
-    ok | {error, Reason :: any()}.
+    ok | {error, Reason :: timeout | any()}.
 
 delete(StoreRef, WorkId) ->
     delete(StoreRef, WorkId, 30000).
@@ -291,7 +291,7 @@ delete(StoreRef, WorkId) ->
 %% -----------------------------------------------------------------------------
 -spec delete(
     StoreRef :: atom(), WorkId :: reliable_work:id(), Timeout :: timeout()) ->
-    ok | {error, Reason :: any()}.
+    ok | {error, Reason :: timeout | any()}.
 
 delete(StoreRef, WorkId, Timeout) ->
     delete_all(StoreRef, [WorkId], Timeout).
@@ -302,7 +302,7 @@ delete(StoreRef, WorkId, Timeout) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec delete_all(StoreRef :: atom(), WorkIds :: [reliable_work:id()]) ->
-    ok | {error, Reason :: any()}.
+    ok | {error, Reason :: timeout | any()}.
 
 delete_all(StoreRef, WorkIds) ->
     delete_all(StoreRef, WorkIds, 30000).
@@ -315,10 +315,10 @@ delete_all(StoreRef, WorkIds) ->
 -spec delete_all(
     StoreRef :: atom(),
     WorkIds :: [reliable_work:id()],
-    Timeout :: timeout()) -> ok | {error, Reason :: any()}.
+    Timeout :: timeout()) -> ok | {error, Reason :: timeout | any()}.
 
 delete_all(StoreRef, WorkIds, Timeout) when is_list(WorkIds)->
-    gen_server:call(StoreRef, {delete, WorkIds}, Timeout).
+    safe_call(StoreRef, {delete, WorkIds}, Timeout).
 
 
 
@@ -452,6 +452,14 @@ code_change(_OldVsn, State, _Extra) ->
 %% PRIVATE
 %% =============================================================================
 
+
+safe_call(ServerRef, Request, Timeout) ->
+    Ref = gen_server:send_request(ServerRef, Request),
+
+    case gen_server:wait_response(Ref, Timeout) of
+        {reply, Response} -> Response;
+        timeout -> {error, timeout}
+    end.
 
 
 %% @private
