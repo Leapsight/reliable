@@ -314,7 +314,11 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
             {ok, #index_results_v1{keys = Keys, continuation = Cont1}} ->
                 ?LOG_DEBUG("Got work keys: ~p", [Keys]),
                 FoldFun = fun(Key, Acc1) ->
-                    case get_work(Pid, Bucket, Key, []) of
+                    %% notfound_ok = true is the default value.
+                    %% This parameter determines how Riak responds if a read fails on a node.
+                    %% Setting to true (the default) is the equivalent to setting R to 1: if the first node to respond doesn’t have a copy of the object, Riak will immediately return a not found error.
+                    %% If set to false, Riak will continue to look for the object on the number of nodes specified by N (aka n_val with default 3).
+                    case get_work(Pid, Bucket, Key, [{notfound_ok, false}]) of
                         {ok, Work} ->
                             ?LOG_DEBUG("got key: ~p", [Key]),
                             ?LOG_DEBUG("got work: ~p", [Work]),
