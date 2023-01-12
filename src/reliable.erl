@@ -23,7 +23,7 @@
 %% occur in order.
 %% The problem arises when one wants to write multiple associated objects to
 %% Riak KV which does not support multi-key atomicity, including but not
-%% exclusively, the update of application managed secondary indices after a
+%% exclusively, the update of application-managed secondary indices after a
 %% write.
 %% @end
 %% -----------------------------------------------------------------------------

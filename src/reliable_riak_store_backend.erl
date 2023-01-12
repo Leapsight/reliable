@@ -89,7 +89,12 @@ enqueue(Ref, Bucket, Work) ->
         {ok, Result} ->
             Result;
         {error, _} = Error ->
-            %% If busy do retries
+            %% TODO Determine if error reason is recoverable or not
+            %% Log (Info|Error) if (yes|no)
+            %% If server error or timeout and recoverable but not overload,
+            %% do retry with backoff (this blocks the worker but the next
+            %% workflow will probably fail with this reason too).
+            %% If unrecoverable, send to Quarantine queue, Dead-letter queue
             Error
     end.
 

@@ -17,6 +17,10 @@
 %%  limitations under the License.
 %% =============================================================================
 
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
 -module(reliable_partition_worker).
 
 -behaviour(gen_server).
@@ -158,6 +162,7 @@ get_db_connection() ->
     Port = reliable_config:riak_port(),
 
     {ok, Conn} = riakc_pb_socket:start_link(Host, Port),
+    %% Crashes
     pong = riakc_pb_socket:ping(Conn),
     ?LOG_DEBUG(#{
         message => "Got connection to Riak",
@@ -166,10 +171,16 @@ get_db_connection() ->
     Conn.
 
 
+%% -----------------------------------------------------------------------------
 %% @private
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
 schedule_work(State) ->
     Floor = reliable_config:get(pull_backoff_min, 2000),
     Ceiling = reliable_config:get(pull_backoff_max, 60000),
+    %% Will send ourselves a message {timeout, Ref, fetch_work}
+    %% that we will handle in handle_info/2
     B = backoff:type(
         backoff:init(Floor, Ceiling, self(), fetch_work),
         jitter
@@ -210,9 +221,12 @@ schedule_work(fail, #state{fetch_backoff = B0} = State) ->
     }.
 
 
+%% -----------------------------------------------------------------------------
 %% @private
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
 process_work(State0) ->
-
     StoreRef = State0#state.store_ref,
     Bucket = State0#state.bucket,
 
@@ -353,6 +367,7 @@ process_tasks(Last, #state{work_state = #{last_ok := true} = WS0} = State) ->
     }),
 
     case reliable_task:result(Task0) of
+
         undefined ->
             {Bool, NewWork} = do_process_task({TaskId, Task0}, State),
             WS1 = WS0#{

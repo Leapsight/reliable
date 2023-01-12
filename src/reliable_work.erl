@@ -1,3 +1,26 @@
+%% =============================================================================
+%%  reliable_work.erl -
+%%
+%%  Copyright (c) 2020 Christopher Meiklejohn. All rights reserved.
+%%  Copyright (c) 2022 Leapsight Technologies Limited. All rights reserved.
+%%
+%%  Licensed under the Apache License, Version 2.0 (the "License");
+%%  you may not use this file except in compliance with the License.
+%%  You may obtain a copy of the License at
+%%
+%%     http://www.apache.org/licenses/LICENSE-2.0
+%%
+%%  Unless required by applicable law or agreed to in writing, software
+%%  distributed under the License is distributed on an "AS IS" BASIS,
+%%  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%%  See the License for the specific language governing permissions and
+%%  limitations under the License.
+%% =============================================================================
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
 -module(reliable_work).
 
 -record(reliable_work, {
@@ -43,7 +66,8 @@
 
 
 %% -----------------------------------------------------------------------------
-%% @doc
+%% @doc Returns a new work object.
+%% Calls {@link new/1} with the atom `undefined' as argument.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec new() -> t().
@@ -75,14 +99,14 @@ new(Id, Tasks) ->
 
 %% -----------------------------------------------------------------------------
 %% @doc Creates a new work object with identifier `Id', tasks `Tasks' and event
-%% payload `EnetPayload'.
+%% payload `EventPayload'.
 %%
 %% `Id' needs to be a key sorteable unique identifier.
 %% If the atom `undefined' is passed, a global key sorteable unique identifier /
 %% will be generated, using `ksuid:gen_id(millisecond)'.
 %%
-%% Tasks is a property lists where the key is and order number and the value an
-%% instance of {@link reliable_work}.
+%% `Tasks' is a property lists where the key is and order number and the value
+%% is a task (See {@link reliable_task:t()}).
 %%
 %% `EventPayload' is any data you would like the subscribers to the Reliable
 %% Events to receive.
@@ -106,17 +130,17 @@ new(Id, Tasks, EventPayload) when is_binary(Id) ->
 
 
 %% -----------------------------------------------------------------------------
-%% @doc
+%% @doc Returns `true' if `Arg' is a work object. Otherwise, returns `false'.
 %% @end
 %% -----------------------------------------------------------------------------
--spec is_type(Work :: t()) -> boolean().
+-spec is_type(Arg :: t()) -> boolean().
 
 is_type(#reliable_work{}) -> true;
 is_type(_) -> false.
 
 
 %% -----------------------------------------------------------------------------
-%% @doc
+%% @doc Returns the `id' of a work object.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec id(Work :: t()) -> binary().
@@ -163,7 +187,7 @@ add_task(_, _, Term) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec update_task(Order :: order(), Task :: reliable_task:t(), Work :: t()) ->
-    t().
+    t() | no_return().
 
 update_task(Order, Task, #reliable_work{tasks = Tasks} = Work)
 when is_integer(Order) andalso Order > 0 ->
@@ -175,7 +199,6 @@ when is_integer(Order) andalso Order > 0 ->
         false ->
             error({badarg, Task})
     end.
-
 
 
 %% -----------------------------------------------------------------------------
