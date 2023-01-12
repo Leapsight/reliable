@@ -2,7 +2,7 @@
 %%  reliable.erl -
 %%
 %%  Copyright (c) 2020 Christopher Meiklejohn. All rights reserved.
-%%  Copyright (c) 2020 Leapsight Holdings Limited. All rights reserved.
+%%  Copyright (c) 2022 Leapsight Technologies Limited. All rights reserved.
 %%
 %%  Licensed under the Apache License, Version 2.0 (the "License");
 %%  you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@
 %% occur in order.
 %% The problem arises when one wants to write multiple associated objects to
 %% Riak KV which does not support multi-key atomicity, including but not
-%% exclusively, the update of application managed secondary indices after a
+%% exclusively, the update of application-managed secondary indices after a
 %% write.
 %% @end
 %% -----------------------------------------------------------------------------
