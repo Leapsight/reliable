@@ -44,6 +44,16 @@
 -export([storage_backend/0]).
 
 
+-eqwalizer({nowarn_function, storage_backend/0}).
+-eqwalizer({nowarn_function, riak_host/0}).
+-eqwalizer({nowarn_function, riak_port/0}).
+-eqwalizer({nowarn_function, instance_name/0}).
+-eqwalizer({nowarn_function, instances/0}).
+-eqwalizer({nowarn_function, number_of_partitions/0}).
+-eqwalizer({nowarn_function, partition_map/0}).
+-eqwalizer({nowarn_function, local_partitions/0}).
+
+
 
 %% =============================================================================
 %% API
@@ -177,7 +187,7 @@ partition_map() ->
             Map = gen_partitions(),
             ok = set(partition_map, Map),
             Map;
-        Map ->
+        Map  when is_map(Map)->
             Map
     end.
 

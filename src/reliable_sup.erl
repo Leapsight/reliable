@@ -29,9 +29,13 @@
     modules => [Id]
 }).
 
--define(WORKER(Id, Args, Restart, Timeout), #{
+-define(WORKER(Id, Args, Restart, Timeout),
+    ?WORKER(Id, Id, Args, Restart, Timeout)
+).
+
+-define(WORKER(Id, Mod, Args, Restart, Timeout), #{
     id => Id,
-    start => {Id, start_link, Args},
+    start => {Mod, start_link, Args},
     restart => Restart,
     shutdown => Timeout,
     type => worker,
@@ -86,6 +90,8 @@ init([]) ->
         period => 1
     },
 
+    CacheOpts = [{n, 5}, {ttl, 30}],
+
     ChildSpecs = [
         ?SUPERVISOR(
             reliable_event_handler_watcher_sup, [], permanent, infinity
@@ -94,7 +100,10 @@ init([]) ->
         %% ?EVENT_MANAGER(reliable_event_manager, permanent, 5000),
         %% Start partition stores before workers
         ?SUPERVISOR(reliable_partition_store_sup, [], permanent, infinity),
-        ?SUPERVISOR(reliable_partition_worker_sup, [], permanent, infinity)
+        ?SUPERVISOR(reliable_partition_worker_sup, [], permanent, infinity),
+        ?WORKER(
+            reliable_cache, cache, [reliable_cache, CacheOpts], permanent, 5000
+        )
     ],
 
     {ok, {SupFlags, ChildSpecs}}.
