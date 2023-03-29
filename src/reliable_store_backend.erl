@@ -24,7 +24,9 @@
 -module(reliable_store_backend).
 
 
--type ref()        ::   pid() | reference() | atom().
+-type ref()             ::  pid() | reference() | atom().
+-type error_reason()    ::  busy | disconnected | timeout
+                            | invalid_datatype | any().
 
 -export_type([ref/0]).
 
@@ -43,41 +45,15 @@
     Ref :: ref(),
     Bucket :: binary(),
     Work :: reliable_work:t()) ->
-    ok | {error, Reason :: any()}.
+    ok | {error, Reason :: error_reason()}.
 
 
--callback flush(Ref :: ref(), Bucket :: binary()) ->
-    ok | {error, Reason :: any()}.
-
-
--callback update(
+-callback enqueue(
     Ref :: ref(),
     Bucket :: binary(),
-    Work :: reliable_work:t()) -> ok | {error, Reason :: any()}.
-
-
--callback fold(
-    Ref :: ref(),
-    Bucket :: binary(),
-    Fun :: function(),
-    Acc :: any(),
-    Opts :: map()) ->
-    {NewAcc :: any(), Continuation :: any()} | {error, Reason :: any()}.
-
-
--callback count(
-    Ref :: ref(),
-    Bucket :: binary(),
-    Opts :: map()) ->
-    List :: integer() | {error, Reason :: any()}.
-
-
--callback list(
-    Ref :: ref(),
-    Bucket :: binary(),
-    Opts :: map()) ->
-    List :: {[reliable_work:t()], Continuation :: any()}
-    | {error, Reason :: any()}.
+    Work :: reliable_work:t(),
+    Opts :: riak_pool:exec_opts()) ->
+    ok | {error, Reason :: error_reason()}.
 
 
 -callback get(
@@ -97,3 +73,45 @@
     Ref :: ref(),
     Bucket :: binary(),
     AllCompleted :: [reliable_work:id()]) -> ok | {error, Reason :: any()}.
+
+
+-callback update(
+    Ref :: ref(),
+    Bucket :: binary(),
+    Work :: reliable_work:t()) -> ok | {error, Reason :: error_reason()}.
+
+
+-callback update(
+    Ref :: ref(),
+    Bucket :: binary(),
+    Work :: reliable_work:t(),
+    Opts :: riak_pool:exec_opts()) -> ok | {error, Reason :: error_reason()}.
+
+
+-callback count(
+    Ref :: ref(),
+    Bucket :: binary(),
+    Opts :: map()) ->
+    List :: integer() | {error, Reason :: any()}.
+
+
+-callback list(
+    Ref :: ref(),
+    Bucket :: binary(),
+    Opts :: map()) ->
+    List :: {[reliable_work:t()], Continuation :: any()}
+    | {error, Reason :: any()}.
+
+
+-callback flush(Ref :: ref(), Bucket :: binary()) ->
+    ok | {error, Reason :: any()}.
+
+
+-callback fold(
+    Ref :: ref(),
+    Bucket :: binary(),
+    Fun :: function(),
+    Acc :: any(),
+    Opts :: map()) ->
+    {NewAcc :: any(), Continuation :: any()} | {error, Reason :: any()}.
+

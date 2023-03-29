@@ -22,6 +22,7 @@
 
 -include_lib("kernel/include/logger.hrl").
 -include_lib("riakc/include/riakc.hrl").
+-include("reliable.hrl").
 
 -author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
 -author("Alejandro Ramallo <alejandro.ramallo@leapsight.com>").
@@ -30,10 +31,12 @@
 
 -export([init/0]).
 -export([enqueue/3]).
+-export([enqueue/4]).
 -export([get/3]).
 -export([delete/3]).
 -export([delete_all/3]).
 -export([update/3]).
+-export([update/4]).
 -export([list/3]).
 -export([flush/2]).
 -export([fold/5]).
@@ -56,6 +59,7 @@ init() ->
         {ok, Pid} ->
             ok = riak_pool:checkin(?POOLNAME, Pid, ok),
             {ok, ?POOLNAME};
+
         {error, Reason} = Error ->
             ?LOG_INFO(#{
                 message => "Error while getting db connection from pool.",
@@ -76,25 +80,47 @@ init() ->
     Work :: reliable_work:t()) -> ok | {error, any()}.
 
 enqueue(Ref, Bucket, Work) ->
+    enqueue(Ref, Bucket, Work, #{timeout => 15000}).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec enqueue(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    Work :: reliable_work:t(),
+    PoolOpts :: riak_pool:opts()) -> ok | {error, any()}.
+
+enqueue(Ref, Bucket, Work, Opts) ->
     WorkId = reliable_work:id(Work),
 
     Fun = fun(Pid) ->
         Object = riakc_obj:new(Bucket, WorkId, term_to_binary(Work)),
-        riakc_pb_socket:put(Pid, Object)
+
+        case riakc_pb_socket:put(Pid, Object) of
+            ok ->
+                ok;
+
+            {error, Reason} ->
+                %% Determines if error reason is recoverable or not
+                %% Log (Info|Error) if (yes|no)
+                %% If server error or timeout and recoverable but not overload,
+                %% might retry with backoff (this blocks the worker but the next
+                %% workflow will probably fail with this reason too) if allowed
+                %% by Opts
+                maybe_throw(format_reason(Reason))
+        end
     end,
 
-    PoolOpts = #{timeout => 10000},
-
-    case riak_pool:execute(Ref, Fun, PoolOpts) of
+    case riak_pool:execute(Ref, Fun, Opts) of
         {ok, Result} ->
             Result;
+
         {error, _} = Error ->
-            %% TODO Determine if error reason is recoverable or not
-            %% Log (Info|Error) if (yes|no)
-            %% If server error or timeout and recoverable but not overload,
-            %% do retry with backoff (this blocks the worker but the next
-            %% workflow will probably fail with this reason too).
-            %% If unrecoverable, send to Quarantine queue, Dead-letter queue
+            %% TODO If unrecoverable, send to Quarantine queue, Dead-letter
+            %% queue
             Error
     end.
 
@@ -110,10 +136,13 @@ enqueue(Ref, Bucket, Work) ->
     {ok, reliable_work:t()} | {error, not_found | any()}.
 
 get(Ref, Bucket, WorkId) ->
-    Fun = fun(Pid) -> get_work(Pid, Bucket, WorkId, []) end,
-    PoolOpts = #{timeout => 10000},
+    Opts = #{timeout => ?DEFAULT_TIMEOUT},
 
-    case riak_pool:execute(Ref, Fun, PoolOpts) of
+    Fun = fun(Pid) ->
+        get_work(Pid, Bucket, WorkId, [])
+    end,
+
+    case riak_pool:execute(Ref, Fun, Opts) of
         {ok, Result} ->
             Result;
         {error, _} = Error ->
@@ -133,23 +162,31 @@ get(Ref, Bucket, WorkId) ->
 
 delete(Pid, Bucket, WorkId) when is_pid(Pid) ->
     case riakc_pb_socket:delete(Pid, Bucket, WorkId) of
-        ok -> ok;
-        {error, Reason} -> {error, format_reason(Reason)}
+        ok ->
+            ok;
+        {error, Reason} ->
+            {error, format_reason(Reason)}
     end;
 
 delete(Ref, Bucket, WorkId) when is_atom(Ref) ->
-    Fun = fun(Pid) -> delete(Pid, Bucket, WorkId) end,
+    Fun = fun(Pid) ->
+        case delete(Pid, Bucket, WorkId) of
+            ok ->
+                ok;
+            {error, Reason} ->
+                maybe_throw(Reason)
+        end
+    end,
 
-    PoolOpts = #{timeout => 10000},
+    Opts = #{timeout => 10000},
 
-    case riak_pool:execute(Ref, Fun, PoolOpts) of
+    case riak_pool:execute(Ref, Fun, Opts) of
         {ok, Result} ->
             Result;
         {error, _} = Error ->
             %% If busy do retries
             Error
     end.
-
 
 
 %% -----------------------------------------------------------------------------
@@ -162,19 +199,28 @@ delete(Ref, Bucket, WorkId) when is_atom(Ref) ->
     AllCompleted :: [reliable_work:id()]) -> ok | {error, Reason :: any()}.
 
 delete_all(Ref, Bucket, WorkIds) ->
+    Opts = #{timeout => ?DEFAULT_TIMEOUT},
+
     Fun = fun(Pid) ->
         _ = lists:foreach(
-            fun(WorkId) -> delete(Pid, Bucket, WorkId) end,
+            fun(WorkId) ->
+                case delete(Pid, Bucket, WorkId) of
+                    ok ->
+                        ok;
+                    {error, Reason} ->
+                        %% Force riak_pool to retry, depending on default opts
+                        maybe_throw(Reason)
+                end
+            end,
             WorkIds
         ),
         ok
     end,
 
-    PoolOpts = #{timeout => 10000},
-
-    case riak_pool:execute(Ref, Fun, PoolOpts) of
+    case riak_pool:execute(Ref, Fun, Opts) of
         {ok, Result} ->
             Result;
+
         {error, _} = Error ->
             %% If busy do retries
             Error
@@ -191,12 +237,27 @@ delete_all(Ref, Bucket, WorkIds) ->
     Work :: reliable_work:t()) -> ok | {error, any()}.
 
 update(Ref, Bucket, Work) ->
+    update(Ref, Bucket, Work, #{timeout => ?DEFAULT_TIMEOUT}).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec update(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    Work :: reliable_work:t(),
+    Opts :: riak_pool:exec_opts()) -> ok | {error, any()}.
+
+update(Ref, Bucket, Work, Opts) ->
     WorkId = reliable_work:id(Work),
 
     Fun = fun(Pid) ->
         case riakc_pb_socket:get(Pid, Bucket, WorkId) of
             {ok, Obj} ->
                 do_update(Pid, Bucket, Work, Obj);
+
             {error, Reason} ->
                 ?LOG_ERROR(#{
                     message => "failed to read object before update.",
@@ -208,11 +269,10 @@ update(Ref, Bucket, Work) ->
         end
     end,
 
-    PoolOpts = #{timeout => 10000},
-
-    case riak_pool:execute(Ref, Fun, PoolOpts) of
+    case riak_pool:execute(Ref, Fun, Opts) of
         {ok, Result} ->
             Result;
+
         {error, _} = Error ->
             %% If busy do retries
             Error
@@ -229,22 +289,29 @@ update(Ref, Bucket, Work) ->
     Opts :: map()) -> Count :: integer() | {error, Reason :: any()}.
 
 count(Ref, Bucket, Opts) ->
+    PoolOpts = #{timeout => ?DEFAULT_TIMEOUT},
+
     Fun = fun(Pid) ->
-        Timeout = maps:get(timeout, Opts, 30000),
+        Timeout = maps:get(timeout, Opts, ?DEFAULT_TIMEOUT),
         Inputs = {index, Bucket, <<"$bucket">>, <<>>},
         Query = [
-            {reduce, {modfun, riak_kv_mapreduce, reduce_count_inputs}, [{reduce_phase_batch_size, 1000}] , true}
+            {
+                reduce,
+                {modfun, riak_kv_mapreduce, reduce_count_inputs},
+                [{reduce_phase_batch_size, 1000}] ,
+                true
+            }
         ],
 
         case riakc_pb_socket:mapred(Pid, Inputs, Query, Timeout) of
             {ok, [{0, [Count]}]} ->
                 Count;
+
             {error, Reason} ->
                 {error, format_reason(Reason)}
         end
     end,
 
-    PoolOpts = #{timeout => 10000},
     case riak_pool:execute(Ref, Fun, PoolOpts) of
         {ok, Result} ->
             Result;
@@ -318,22 +385,51 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
         case Res of
             {ok, #index_results_v1{keys = Keys, continuation = Cont1}} ->
                 ?LOG_DEBUG("Got work keys: ~p", [Keys]),
+
                 FoldFun = fun(Key, Acc1) ->
                     %% notfound_ok = true is the default value.
-                    %% This parameter determines how Riak responds if a read fails on a node.
-                    %% Setting to true (the default) is the equivalent to setting R to 1: if the first node to respond doesn’t have a copy of the object, Riak will immediately return a not found error.
-                    %% If set to false, Riak will continue to look for the object on the number of nodes specified by N (aka n_val with default 3).
-                    case get_work(Pid, Bucket, Key, [{notfound_ok, false}]) of
+                    %% This parameter determines how Riak responds if a read
+                    %% fails on a node.
+                    %% Setting to true (the default) is the equivalent to
+                    %% setting R to 1: if the first node to respond doesn’t
+                    %% have a copy of the object, Riak will immediately return
+                    %% a not found error.
+                    %% If set to false, Riak will continue to look for the
+                    %% object on the number of nodes specified by N (aka n_val
+                    %% with default 3).
+                    RiakOpts = [{notfound_ok, false}],
+
+                    case get_work(Pid, Bucket, Key, RiakOpts) of
                         {ok, Work} ->
-                            ?LOG_DEBUG("got key: ~p", [Key]),
-                            ?LOG_DEBUG("got work: ~p", [Work]),
+                            ?LOG_DEBUG("got key: ~p, work: ~p", [Key, Work]),
                             Function({Key, Work}, Acc1);
+
                         {error, Reason} ->
-                            ?LOG_WARNING(
-                                "Could not retrieve work from store (it can well be a stale Riak KV Secondary index); "
-                                "backend=~p, reason=~p, partition=~p, key=~p",
-                                [?MODULE, Reason, Bucket, Key]
-                            ),
+                            case reliable_cache:has(Key) of
+                                true ->
+                                    ?LOG_DEBUG(#{
+                                        description =>
+                                            "Couldn't retrieve work from store "
+                                            "(not an error, case of a stale "
+                                            "$bucket index, item in cache).",
+                                        backend => ?MODULE,
+                                        reason => Reason,
+                                        partition => Bucket,
+                                        key => Key
+                                    });
+                                false ->
+
+                                    ?LOG_WARNING(#{
+                                        description =>
+                                            "Couldn't retrieve work "
+                                            "from store.",
+                                        backend => ?MODULE,
+                                        reason => Reason,
+                                        partition => Bucket,
+                                        key => Key
+                                    })
+                            end,
+
                             Acc1
                     end
                 end,
@@ -344,7 +440,7 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
 
     end,
 
-    PoolOpts = #{timeout => 10000},
+    PoolOpts = #{timeout => ?DEFAULT_TIMEOUT},
 
     case riak_pool:execute(Ref, Fun, PoolOpts) of
         {ok, {ok, _} = OK} ->
@@ -386,7 +482,18 @@ fold_opts(Opts0) ->
 
 
 %% @private
-format_reason("overload") -> overload;
+maybe_throw(Reason)
+when Reason == disconnected; Reason == overload; Reason == timeout ->
+    %% Throw so that riak_pool can retry according to PoolOpts
+    throw(Reason);
+
+maybe_throw(Reason) ->
+    {error, Reason}.
+
+
+%% @private
+format_reason(<<"Operation type is", _/binary>>) -> datatype_mismatch;
+format_reason(<<"overload">>) -> overload;
 format_reason(notfound) -> not_found;
 format_reason(Reason) -> Reason.
 
@@ -468,4 +575,5 @@ flush(Ref, Bucket, Opts) ->
         throw:Reason ->
             {error, Reason}
     end.
+
 

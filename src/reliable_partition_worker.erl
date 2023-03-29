@@ -29,7 +29,7 @@
 -author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
 -author("Alejandro Ramallo <alejandro.ramallo@leapsight.com>").
 
-
+-define(LIST_MAX_RESULTS, 100).
 
 -record(state, {
     store_ref               ::  atom(),
@@ -240,7 +240,8 @@ process_work(State0) ->
     %% We retrieve the work list from the partition store server
     %% We ignore the continuation, we simply query again on the next
     %% scheduled run.
-    Opts = #{max_results => 100},
+    Opts = #{max_results => ?LIST_MAX_RESULTS},
+
     case reliable_partition_store:list(StoreRef, Opts) of
         {ok, {WorkList, _Cont}} ->
             %% Iterate through work that needs to be done.
@@ -299,6 +300,13 @@ process_work(Work, {Acc, State0}) ->
             }),
 
             ok = reliable_partition_store:delete(StoreRef, WorkId),
+
+            %% Cache so that we avoiud printing a warming if next batch
+            %% includes this WorkId. This happens with the
+            %% reliable_riak_store_backend as the $bucket index is slow to get
+            %% updated.
+            ok = reliable_cache:put(WorkId),
+
             WorkRef = reliable_work:ref(StoreRef, Work),
             Payload = reliable_work:event_payload(Work),
             Event = {reliable_event, #{
@@ -308,6 +316,7 @@ process_work(Work, {Acc, State0}) ->
             }},
             ok = reliable_event_manager:notify(Event),
             {Acc ++ [WorkId], State1};
+
         #state{work_state = #{last_ok := false}} = State1 ->
             ?LOG_DEBUG(LogCtxt#{message => "Work NOT YET completed"}),
             {Acc, State1}
@@ -501,3 +510,6 @@ replace_symbolics(Args, State) ->
         end,
         Args
     ).
+
+
+

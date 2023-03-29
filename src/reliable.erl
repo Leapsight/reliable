@@ -29,22 +29,29 @@
 %% -----------------------------------------------------------------------------
 -module(reliable).
 -include_lib("kernel/include/logger.hrl").
+-include("reliable.hrl").
 
 -author("Christopher Meiklejohn <christopher.meiklejohn@gmail.com>").
 -author("Alejandro Ramallo <alejandro.ramallo@leapsight.com>").
 
--define(DEFAULT_TIMEOUT, 30000).
 -define(WORKFLOW_ID, reliable_workflow_id).
 -define(WORKFLOW_LEVEL, reliable_workflow_level).
 -define(WORKFLOW_GRAPH, reliable_digraph).
 -define(WORKFLOW_EVENT_PAYLOAD, reliable_workflow_event_payload).
 
 
--type opts()            ::  #{
+-type enqueue_opts()    ::  #{
                                 work_id => reliable_work:id(),
                                 partition_key => binary(),
                                 event_payload => any(),
-                                subscribe => boolean()
+                                subscribe => boolean(),
+                                %% riak_pool:opts()
+                                deadline => pos_integer(),
+                                timeout => pos_integer(),
+                                max_retries => non_neg_integer(),
+                                retry_backoff_interval_min => non_neg_integer(),
+                                retry_backoff_interval_max => non_neg_integer(),
+                                retry_backoff_type => jitter | normal
                             }.
 
 -type wf_opts()         ::  #{
@@ -72,7 +79,7 @@
                                 is_nested := boolean()
                             }.
 
--export_type([opts/0]).
+-export_type([enqueue_opts/0]).
 -export_type([wf_item/0]).
 -export_type([wf_item_id/0]).
 -export_type([wf_opts/0]).
@@ -84,6 +91,7 @@
 -export([add_workflow_precedence/2]).
 -export([enqueue/1]).
 -export([enqueue/2]).
+-export([enqueue/3]).
 -export([ensure_in_workflow/0]).
 -export([find_workflow_item/1]).
 -export([get_workflow_event_payload/0]).
@@ -126,14 +134,30 @@ enqueue(Tasks) ->
 %% > See {@link yield/1,2} to track progress.
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(Tasks :: [reliable_task:new()], Opts :: opts()) ->
+-spec enqueue(Tasks :: [reliable_task:new()], Opts :: enqueue_opts()) ->
     {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
 
-enqueue(Tasks, Opts) when is_list(Tasks) ->
+enqueue(Tasks, Opts) ->
+    enqueue(Tasks, Opts, ?DEFAULT_TIMEOUT).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% > Notice subscriptions are not working at the moment
+%% > See {@link yield/1,2} to track progress.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec enqueue(
+    Tasks :: [reliable_task:new()],
+    Opts :: enqueue_opts(),
+    Timeout :: timeout()) ->
+    {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
+
+enqueue(Tasks, Opts, Timeout)
+when is_list(Tasks) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
     WorkId = get_work_id(Opts),
     PartitionKey = maps:get(partition_key, Opts, undefined),
     EventPayload = maps:get(event_payload, Opts, undefined),
-    Timeout = maps:get(timeout, Opts, ?DEFAULT_TIMEOUT),
 
     Work = reliable_work:new(WorkId, Tasks, EventPayload),
     StoreRef = binary_to_atom(reliable_config:partition(PartitionKey), utf8),
@@ -141,7 +165,7 @@ enqueue(Tasks, Opts) when is_list(Tasks) ->
 
     Subscribed = maybe_subscribe(WorkRef, Opts),
 
-    try reliable_partition_store:enqueue(StoreRef, Work, Timeout) of
+    try reliable_partition_store:enqueue(StoreRef, Work, Opts, Timeout) of
         {ok, WorkRef} ->
             {ok, WorkRef};
         {error, Reason} ->
@@ -194,7 +218,7 @@ yield(WorkRef) ->
 yield(_, Timeout) when Timeout =< 0 ->
     timeout;
 
-yield(WorkRef, Timeout) ->
+yield(WorkRef, Timeout) when ?IS_TIMEOUT(Timeout) ->
     yield(WorkRef, Timeout, undefined).
 
 
@@ -392,7 +416,7 @@ workflow(Fun) ->
 %%
 %% @end
 %% -----------------------------------------------------------------------------
--spec workflow(Fun :: wf_fun(), Opts :: opts()) ->
+-spec workflow(Fun :: wf_fun(), Opts :: wf_opts()) ->
     {true | false, wf_result()}
     | {error, Reason :: any()}
     | no_return().

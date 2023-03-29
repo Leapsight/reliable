@@ -24,21 +24,23 @@
 -module(reliable_work).
 
 -record(reliable_work, {
-    id                      ::  binary(),
+    id                      ::  id(),
     tasks = #{}             ::  #{order() := reliable_task:t()},
     event_payload           ::  undefined | any()
 }).
 
 
 -type t()                   ::  #reliable_work{}.
+-type id()                  ::  binary().
 -type order()               ::  pos_integer().
 -type status()              ::  #{
-    work_id => binary(),
-    nbr_of_tasks => integer(),
-    nbr_of_tasks_remaining => integer(),
-    event_payload => any()
-}.
+                                    work_id := binary(),
+                                    nbr_of_tasks := integer(),
+                                    nbr_of_tasks_remaining := integer(),
+                                    event_payload := any()
+                                }.
 -export_type([t/0]).
+-export_type([id/0]).
 -export_type([order/0]).
 -export_type([status/0]).
 

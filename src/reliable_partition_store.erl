@@ -20,9 +20,12 @@
 -module(reliable_partition_store).
 
 -behaviour(gen_server).
+
 -include_lib("kernel/include/logger.hrl").
+-include("reliable.hrl").
 
 -author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
+-author("Alejandro Ramallo <alejandro.ramallo@leapsight.com>").
 
 -record(state, {
     bucket                  ::  binary(),
@@ -31,11 +34,12 @@
 }).
 
 
+-type list_opts()           ::  #{max_results => pos_integer()}.
+
 
 %% API
 -export([start_link/2]).
--export([enqueue/2]).
--export([enqueue/3]).
+-export([enqueue/4]).
 -export([list/2]).
 -export([list/3]).
 -export([flush_all/0]).
@@ -131,28 +135,22 @@ status(StoreRef, WorkRef, Timeout) when is_atom(StoreRef) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(StoreRef :: atom(), Work :: reliable_work:t()) ->
-    {ok, reliable_work:ref()} | {error, timeout | any()}.
-
-enqueue(StoreRef, Work) ->
-    enqueue(StoreRef, Work, 30000).
-
-
-%% -----------------------------------------------------------------------------
-%% @doc
-%% @end
-%% -----------------------------------------------------------------------------
 -spec enqueue(
-    StoreRef :: atom(), Work :: reliable_work:t(), Timeout :: timeout()) ->
+    StoreRef :: atom(),
+    Work :: reliable_work:t(),
+    Opts :: reliable:enqueue_opts(),
+    Timeout :: timeout()) ->
     {ok, reliable_work:ref()} | {error, timeout | any()}.
 
-enqueue(StoreRef, Work, Timeout) when is_atom(StoreRef) ->
+enqueue(StoreRef, Work, Opts, Timeout)
+when is_atom(StoreRef) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
     case reliable_work:is_type(Work) of
         true ->
-            safe_call(StoreRef, {enqueue, StoreRef, Work}, Timeout);
+            safe_call(StoreRef, {enqueue, StoreRef, Work, Opts}, Timeout);
         false ->
             {error, {badarg, Work}}
     end.
+
 
 %% -----------------------------------------------------------------------------
 %% @doc
@@ -169,7 +167,8 @@ flush_all() ->
                     ok;
                 {error, Reason} ->
                     ?LOG_ERROR(#{
-                        message => "Error while flushing reliable partition store",
+                        message =>
+                            "Error while flushing reliable partition store",
                         reason => Reason,
                         ref => StoreRef
                     }),
@@ -194,33 +193,33 @@ flush(StoreRef) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec flush(StoreRef :: atom(), Timeout :: timeout()) ->
+-spec flush(StoreRef :: atom(), Opts :: riak_pool:exec_opts()) ->
     ok | {error, Reason :: timeout | any()}.
 
-flush(StoreRef, Timeout) ->
-    safe_call(StoreRef, flush, Timeout).
+flush(StoreRef, Opts) ->
+    safe_call(StoreRef, flush, Opts).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec list(StoreRef :: atom(), Opts :: map()) ->
+-spec list(StoreRef :: atom(), Opts :: list_opts()) ->
     {[reliable_work:t()], Continuation :: any()}.
 
 list(StoreRef, Opts) ->
-    list(StoreRef, Opts, 30000).
+    list(StoreRef, Opts, ?DEFAULT_TIMEOUT).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec list(StoreRef :: atom(), Opts :: map(), Timeout :: timeout()) ->
+-spec list(StoreRef :: atom(), Opts :: list_opts(), Timeout :: timeout()) ->
     {ok, {[reliable_work:t()], Continuation :: any()}}
     | {error, Reason :: timeout | any()}.
 
-list(StoreRef, Opts, Timeout) ->
+list(StoreRef, Opts, Timeout) when is_map(Opts), ?IS_TIMEOUT(Timeout) ->
     safe_call(StoreRef, {list, Opts}, Timeout).
 
 
@@ -232,7 +231,7 @@ list(StoreRef, Opts, Timeout) ->
     Count :: integer() | {error, Reason :: timeout | any()}.
 
 count(StoreRef) ->
-    count(StoreRef, 30000).
+    count(StoreRef, ?DEFAULT_TIMEOUT).
 
 
 %% -----------------------------------------------------------------------------
@@ -242,8 +241,11 @@ count(StoreRef) ->
 -spec count(StoreRef :: atom(), Timeout :: timeout()) ->
     {[reliable_work:t()], Continuation :: timeout | any()}.
 
-count(StoreRef, Timeout) ->
-    safe_call(StoreRef, {count, Timeout}, Timeout + 100).
+count(StoreRef, Timeout) when is_integer(Timeout) ->
+    count(StoreRef, Timeout + 100);
+
+count(StoreRef, Timeout) when ?IS_TIMEOUT(Timeout) ->
+    safe_call(StoreRef, {count, Timeout}, Timeout).
 
 
 %% -----------------------------------------------------------------------------
@@ -254,7 +256,7 @@ count(StoreRef, Timeout) ->
     ok | {error, Reason :: any()}.
 
 update(StoreRef, Work) ->
-    update(StoreRef, Work, 30000).
+    update(StoreRef, Work, ?DEFAULT_TIMEOUT).
 
 
 %% -----------------------------------------------------------------------------
@@ -282,7 +284,7 @@ update(StoreRef, Work, Timeout) ->
     ok | {error, Reason :: timeout | any()}.
 
 delete(StoreRef, WorkId) ->
-    delete(StoreRef, WorkId, 30000).
+    delete(StoreRef, WorkId, ?DEFAULT_TIMEOUT).
 
 
 %% -----------------------------------------------------------------------------
@@ -305,7 +307,7 @@ delete(StoreRef, WorkId, Timeout) ->
     ok | {error, Reason :: timeout | any()}.
 
 delete_all(StoreRef, WorkIds) ->
-    delete_all(StoreRef, WorkIds, 30000).
+    delete_all(StoreRef, WorkIds, ?DEFAULT_TIMEOUT).
 
 
 %% -----------------------------------------------------------------------------
@@ -347,21 +349,25 @@ init([Bucket]) ->
     end.
 
 
-handle_call({enqueue, StoreRef, Work}, From, #state{} = State) ->
+handle_call({enqueue, StoreRef, Work, Opts}, From, #state{} = State) ->
     BackendMod = State#state.backend,
     Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
-    case do_enqueue(StoreRef, BackendMod, Ref, Bucket, Work) of
+    case do_enqueue(StoreRef, BackendMod, Ref, Bucket, Work, Opts) of
         {ok, WorkRef} ->
             _ = gen_server:reply(From, {ok, WorkRef}),
             Payload = reliable_work:event_payload(Work),
-            Event = {reliable_event, #{
-                status => scheduled,
-                work_ref => WorkRef,
-                payload => Payload
-            }},
+            Event = {
+                reliable_event,
+                #{
+                    status => scheduled,
+                    work_ref => WorkRef,
+                    payload => Payload
+                }
+            },
             ok = reliable_event_manager:notify(Event),
             {noreply, State};
+
         {error, _} = Error ->
             {reply, Error, State}
     end;
@@ -374,6 +380,7 @@ handle_call({status, WorkId}, _From, State) ->
     Result = case BackendMod:get(Ref, Bucket, WorkId) of
         {ok, Work} ->
             {in_progress, reliable_work:status(Work)};
+
         {error, _} = Error ->
             Error
     end,
@@ -463,9 +470,9 @@ safe_call(ServerRef, Request, Timeout) ->
 
 
 %% @private
-do_enqueue(StoreRef, BackendMod, Ref, Bucket, Work) ->
+do_enqueue(StoreRef, BackendMod, Ref, Bucket, Work, Opts) ->
     WorkId = reliable_work:id(Work),
-    case BackendMod:enqueue(Ref, Bucket, Work) of
+    case BackendMod:enqueue(Ref, Bucket, Work, Opts) of
         ok ->
             ?LOG_INFO(#{
                 message => "Enqueued work",

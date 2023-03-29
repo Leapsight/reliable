@@ -12,6 +12,7 @@
         ksuid,
         app_config,
         gproc,
+        cache,
         backoff,
         riakc,
         riak_pool
