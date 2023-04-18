@@ -4,7 +4,7 @@ test:
 	rebar3 ct --readable=false -v 	
 
 docs:
-	rebar3 ex_doc --skip_deps=true
+	rebar3 ex_doc skip_deps=true
 
 compile:
 	rebar3 compile
