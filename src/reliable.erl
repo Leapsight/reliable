@@ -192,11 +192,11 @@ when is_list(Tasks) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
 %% > This will be replaced by a pubsub version soon.
 %% @end
 %% -----------------------------------------------------------------------------
--spec yield(WorkRef :: reliable_worker:work_ref()) ->
-    {ok, Payload :: any()} | timeout.
+-spec yield(WorkRef :: reliable_work_ref:t()) ->
+    {ok, Payload :: any()} | {error, any()} | timeout.
 
 yield(WorkRef) ->
-    yield(WorkRef, infinity).
+    yield(WorkRef, 15000).
 
 
 %% -----------------------------------------------------------------------------
@@ -212,13 +212,10 @@ yield(WorkRef) ->
 %% > This will be replaced by a pubsub version soon.
 %% @end
 %% -----------------------------------------------------------------------------
--spec yield(WorkRef :: reliable_worker:work_ref(), Timeout :: timeout()) ->
-    {ok, Payload :: any()} | timeout.
+-spec yield(WorkRef :: reliable_work_ref:t(), Timeout :: pos_integer()) ->
+    {ok, Payload :: any()} | {error, any()} | timeout.
 
-yield(_, Timeout) when Timeout =< 0 ->
-    timeout;
-
-yield(WorkRef, Timeout) when ?IS_TIMEOUT(Timeout) ->
+yield(WorkRef, Timeout) when is_integer(Timeout), Timeout > 0 ->
     yield(WorkRef, Timeout, undefined).
 
 
@@ -244,7 +241,7 @@ status(WorkerRef) ->
     WorkRef :: reliable_work_ref:t() | binary(), Timeout :: timeout()) ->
     {in_progress, Status :: reliable_work:status()}
     | {failed, Status :: reliable_work:status()}
-    | {error, not_found | badref | any()}.
+    | {error, not_found | timeout | badref | any()}.
 
 status(WorkerRef, Timeout) ->
     reliable_partition_store:status(WorkerRef, Timeout).
@@ -412,7 +409,7 @@ workflow(Fun) ->
 %% enclosing parent workflow is aborted, the entire nested workflow is aborted.
 %%
 %% > Notice subscriptions are not working at the moment
-%% > See {@link yield/1,2} to track progress.
+%% > See {@link yield/2} to track progress.
 %%
 %% @end
 %% -----------------------------------------------------------------------------
@@ -825,11 +822,6 @@ get_work_id(_) ->
     ksuid:gen_id(millisecond).
 
 
-
-%% @private
-
-
-
 %% @private
 maybe_subscribe(_WorkRef, _Opts) ->
     %% This process can only subscribe to one event, otherwise we get an
@@ -848,10 +840,14 @@ unsubscribe(_WorkRef) ->
     WorkRef :: reliable_work_ref:t(),
     Timeout :: integer(),
     Status :: undefined | reliable_work:status()) ->
-    {ok, Payload :: any()} | {error, not_found}.
+    {ok, Payload :: any()} | {error, any()} | timeout.
+
+
+yield(_, 0, _) ->
+    timeout;
 
 yield(WorkRef, Timeout, Status0) ->
-    SleepTime = 2000,
+    SleepTime = 1000,
     T0 = erlang:system_time(millisecond),
 
     case status(WorkRef) of
@@ -859,16 +855,20 @@ yield(WorkRef, Timeout, Status0) ->
             ok = yield_sleep(SleepTime, Timeout),
             T1 = erlang:system_time(millisecond),
             yield(WorkRef, Timeout - (T1 - T0), Status1);
+
         {failed, Status1} ->
             {ok, maps:get(event_payload, Status1)};
+
         {error, not_found} = Error when Status0 == undefined ->
             Error;
+
         {error, not_found} ->
             %% At the moment a completed or failed Work is removed
             %% so the absence is regarded as completion
             %% TODO this will change in the future as we will retain work
             %% objects
             {ok, maps:get(event_payload, Status0)};
+
         {error, Reason} ->
             error(Reason)
     end.
