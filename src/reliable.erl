@@ -22,9 +22,8 @@
 %% ensuring a sequence of Riak KV operations are guaranteed to occur, and to
 %% occur in order.
 %% The problem arises when one wants to write multiple associated objects to
-%% Riak KV which does not support multi-key atomicity, including but not
-%% exclusively, the update of application-managed secondary indices after a
-%% write.
+%% Riak KV which does not support multi-key atomicity e.g. update of
+%% application-managed secondary indices after a write.
 %% @end
 %% -----------------------------------------------------------------------------
 -module(reliable).
@@ -68,8 +67,8 @@
                             }.
 -type wf_item_id()      ::  term().
 
--type wf_action()       ::  reliable_task:new()
-                            | fun(() -> reliable_task:new()).
+-type wf_action()       ::  reliable_task:t()
+                            | fun(() -> reliable_task:t()).
 -type wf_fun()          ::  fun(() -> wf_fun_result()).
 -type wf_fun_result()   ::  any().
 -type wf_result()       ::  #{
@@ -118,10 +117,10 @@
 %% -----------------------------------------------------------------------------
 %% @doc
 %% > Notice subscriptions are not working at the moment.
-%% > See {@link yield/1,2} to track progress.
+%% > See {@link yield/2} to track progress.
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(Tasks :: [reliable_task:new()]) ->
+-spec enqueue(Tasks :: [{pos_integer(), reliable_task:t()}]) ->
     {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
 
 enqueue(Tasks) ->
@@ -131,10 +130,10 @@ enqueue(Tasks) ->
 %% -----------------------------------------------------------------------------
 %% @doc
 %% > Notice subscriptions are not working at the moment
-%% > See {@link yield/1,2} to track progress.
+%% > See {@link yield/2} to track progress.
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(Tasks :: [reliable_task:new()], Opts :: enqueue_opts()) ->
+-spec enqueue(Tasks :: [{pos_integer(), reliable_task:t()}], Opts :: enqueue_opts()) ->
     {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
 
 enqueue(Tasks, Opts) ->
@@ -144,11 +143,11 @@ enqueue(Tasks, Opts) ->
 %% -----------------------------------------------------------------------------
 %% @doc
 %% > Notice subscriptions are not working at the moment
-%% > See {@link yield/1,2} to track progress.
+%% > See {@link yield/2} to track progress.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec enqueue(
-    Tasks :: [reliable_task:new()],
+    Tasks :: [{pos_integer(), reliable_task:t()}],
     Opts :: enqueue_opts(),
     Timeout :: timeout()) ->
     {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
@@ -321,6 +320,12 @@ workflow_id() ->
 %% Termination of a Babel workflow means that an exception is thrown to an
 %% enclosing catch. Thus, the expression `catch babel:abort(foo)' does not
 %% terminate the workflow.
+%%
+%% Example:
+%% ```
+%% reliable:workflow(fun()
+%% )
+%% '''
 %% @end
 %% -----------------------------------------------------------------------------
 -spec abort(Reason :: any()) -> no_return().
@@ -335,7 +340,7 @@ abort(Reason) ->
 %% the `Opts' argument.
 %%
 %% > Notice subscriptions are not working at the moment
-%% > See {@link yield/1,2} to track progress.
+%% > See {@link yield/2} to track progress.
 %%
 %% @end
 %% -----------------------------------------------------------------------------

@@ -25,14 +25,13 @@
 
 -record(reliable_work, {
     id                      ::  id(),
-    tasks = #{}             ::  #{order() := reliable_task:t()},
+    tasks = #{}             ::  #{pos_integer() := reliable_task:t()},
     event_payload           ::  undefined | any()
 }).
 
 
 -type t()                   ::  #reliable_work{}.
 -type id()                  ::  binary().
--type order()               ::  pos_integer().
 -type status()              ::  #{
                                     work_id := binary(),
                                     nbr_of_tasks := integer(),
@@ -41,7 +40,6 @@
                                 }.
 -export_type([t/0]).
 -export_type([id/0]).
--export_type([order/0]).
 -export_type([status/0]).
 
 %% API
@@ -93,7 +91,7 @@ new(Id) ->
 %% @doc Calls {@link new/3} with `undefined' as the third argument.
 %% @end
 %% -----------------------------------------------------------------------------
--spec new(Id :: binary() | undefined, [{order(), reliable_task:t()}]) -> t().
+-spec new(Id :: binary() | undefined, [{pos_integer(), reliable_task:t()}]) -> t().
 
 new(Id, Tasks) ->
     new(Id, Tasks, undefined).
@@ -116,7 +114,7 @@ new(Id, Tasks) ->
 %% -----------------------------------------------------------------------------
 -spec new(
     Id :: binary() | undefined,
-    Tasks :: [{order(), reliable_task:t()}],
+    Tasks :: [{pos_integer(), reliable_task:t()}],
     EventPayload :: undefined | any()) -> t().
 
 new(undefined, Tasks, EventPayload) ->
@@ -164,7 +162,7 @@ ref(StoreRef, #reliable_work{id = Id}) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec add_task(Order :: order(), Task :: reliable_task:t(), Work :: t()) -> t().
+-spec add_task(Order :: pos_integer(), Task :: reliable_task:t(), Work :: t()) -> t().
 
 add_task(Order, Task, #reliable_work{tasks = Tasks} = Work)
 when is_integer(Order) andalso Order > 0 ->
@@ -188,7 +186,7 @@ add_task(_, _, Term) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec update_task(Order :: order(), Task :: reliable_task:t(), Work :: t()) ->
+-spec update_task(Order :: pos_integer(), Task :: reliable_task:t(), Work :: t()) ->
     t() | no_return().
 
 update_task(Order, Task, #reliable_work{tasks = Tasks} = Work)
@@ -207,7 +205,7 @@ when is_integer(Order) andalso Order > 0 ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec tasks(t()) -> [{order(), reliable_task:t()}].
+-spec tasks(t()) -> [{pos_integer(), reliable_task:t()}].
 
 tasks(#reliable_work{tasks = Val}) ->
     maps:to_list(Val).
@@ -217,7 +215,7 @@ tasks(#reliable_work{tasks = Val}) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec nbr_of_tasks(t()) -> [{order(), reliable_task:t()}].
+-spec nbr_of_tasks(t()) -> [{pos_integer(), reliable_task:t()}].
 
 nbr_of_tasks(#reliable_work{tasks = Val}) ->
     maps:size(Val).

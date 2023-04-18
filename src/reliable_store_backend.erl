@@ -52,7 +52,7 @@
     Ref :: ref(),
     Bucket :: binary(),
     Work :: reliable_work:t(),
-    Opts :: riak_pool:exec_opts()) ->
+    Opts :: any()) ->
     ok | {error, Reason :: error_reason()}.
 
 
@@ -85,7 +85,7 @@
     Ref :: ref(),
     Bucket :: binary(),
     Work :: reliable_work:t(),
-    Opts :: riak_pool:exec_opts()) -> ok | {error, Reason :: error_reason()}.
+    Opts :: any()) -> ok | {error, Reason :: error_reason()}.
 
 
 -callback count(
