@@ -92,14 +92,14 @@
     Ref :: ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: integer() | {error, Reason :: any()}.
+    {ok, Count :: integer()} | {error, Reason :: any()}.
 
 
 -callback list(
     Ref :: ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: {[reliable_work:t()], Continuation :: any()}
+    {ok, {[reliable_work:t()], Continuation :: any()}}
     | {error, Reason :: any()}.
 
 
@@ -113,5 +113,5 @@
     Fun :: function(),
     Acc :: any(),
     Opts :: map()) ->
-    {NewAcc :: any(), Continuation :: any()} | {error, Reason :: any()}.
+    {ok, {NewAcc :: any(), Continuation :: any()}} | {error, Reason :: any()}.
 

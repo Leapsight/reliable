@@ -75,7 +75,7 @@
 
 
 -spec start_link(Name :: atom(), Bucket :: binary()) ->
-    {ok, pid()} | {error, Reason :: any()}.
+    {ok, pid()} | ignore | {error, any()}.
 
 start_link(Name, Bucket) ->
     gen_server:start_link({local, Name}, ?MODULE, [Bucket], []).
@@ -85,10 +85,10 @@ start_link(Name, Bucket) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkRef :: reliable_work:ref() | binary()) ->
-    {in_progress, Info :: map()}
-    | {failed, Info :: map()}
-    | {error, not_found | badref | any()}.
+-spec status(WorkRef :: reliable_work_ref:t() | binary()) ->
+    {in_progress, Info :: reliable_work:status()}
+    | {failed, Info :: reliable_work:status()}
+    | {error, not_found | timeout | badref | any()}.
 
 status(WorkRef) ->
     status(WorkRef, 5000).
@@ -98,10 +98,10 @@ status(WorkRef) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(WorkRef :: reliable_work:ref() | binary(), Timeout :: timeout()) ->
-    {in_progress, Info :: map()}
-    | {failed, Info :: map()}
-    | {error, not_found, badref | any()}.
+-spec status(WorkRef :: reliable_work_ref:t() | binary(), Timeout :: timeout()) ->
+    {in_progress, Info :: reliable_work:status()}
+    | {failed, Info :: reliable_work:status()}
+    | {error, not_found | timeout | badref | any()}.
 
 status(Bin, Timeout) when is_binary(Bin) ->
     status(reliable_work_ref:decode(Bin), Timeout);
@@ -121,10 +121,10 @@ status(WorkRef, Timeout) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(StoreRef :: atom(), WorkRef :: reliable_work:ref(), timeout()) ->
-    {in_progress, Info :: map()}
-    | {failed, Info :: map()}
-    | {error, not_found | timeout | any()}.
+-spec status(StoreRef :: atom(), WorkRef :: reliable_work_ref:t(), timeout()) ->
+    {in_progress, Info :: reliable_work:status()}
+    | {failed, Info :: reliable_work:status()}
+    | {error, not_found | timeout | badref | any()}.
 
 status(StoreRef, WorkRef, Timeout) when is_atom(StoreRef) ->
     WorkId = reliable_work_ref:work_id(WorkRef),
@@ -140,7 +140,7 @@ status(StoreRef, WorkRef, Timeout) when is_atom(StoreRef) ->
     Work :: reliable_work:t(),
     Opts :: reliable:enqueue_opts(),
     Timeout :: timeout()) ->
-    {ok, reliable_work:ref()} | {error, timeout | any()}.
+    {ok, reliable_work_ref:t()} | {error, timeout | any()}.
 
 enqueue(StoreRef, Work, Opts, Timeout)
 when is_atom(StoreRef) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
@@ -162,7 +162,8 @@ flush_all() ->
     Stores = supervisor:which_children(reliable_partition_store_sup),
     _ = [
         begin
-            case flush(StoreRef, 5000) of
+            %% eqwalizer:ignore StoreRef
+            case flush(StoreRef) of
                 ok ->
                     ok;
                 {error, Reason} ->
@@ -186,7 +187,7 @@ flush_all() ->
 -spec flush(StoreRef :: atom()) -> ok | {error, Reason :: any()}.
 
 flush(StoreRef) ->
-    flush(StoreRef, 5000).
+    flush(StoreRef, #{timeout => 5000}).
 
 
 %% -----------------------------------------------------------------------------
@@ -205,7 +206,8 @@ flush(StoreRef, Opts) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec list(StoreRef :: atom(), Opts :: list_opts()) ->
-    {[reliable_work:t()], Continuation :: any()}.
+    {ok, {[reliable_work:t()], Continuation :: any()}}
+    | {error, Reason :: any()}.
 
 list(StoreRef, Opts) ->
     list(StoreRef, Opts, ?DEFAULT_TIMEOUT).
@@ -217,7 +219,7 @@ list(StoreRef, Opts) ->
 %% -----------------------------------------------------------------------------
 -spec list(StoreRef :: atom(), Opts :: list_opts(), Timeout :: timeout()) ->
     {ok, {[reliable_work:t()], Continuation :: any()}}
-    | {error, Reason :: timeout | any()}.
+    | {error, Reason :: any()}.
 
 list(StoreRef, Opts, Timeout) when is_map(Opts), ?IS_TIMEOUT(Timeout) ->
     safe_call(StoreRef, {list, Opts}, Timeout).
@@ -228,7 +230,7 @@ list(StoreRef, Opts, Timeout) when is_map(Opts), ?IS_TIMEOUT(Timeout) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec count(StoreRef :: atom()) ->
-    Count :: integer() | {error, Reason :: timeout | any()}.
+    {ok, Count :: integer()} | {error, Reason :: any()}.
 
 count(StoreRef) ->
     count(StoreRef, ?DEFAULT_TIMEOUT).
@@ -239,7 +241,7 @@ count(StoreRef) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec count(StoreRef :: atom(), Timeout :: timeout()) ->
-    {[reliable_work:t()], Continuation :: timeout | any()}.
+    {ok, Count :: integer()} | {error, Reason :: any()}.
 
 count(StoreRef, Timeout) when is_integer(Timeout) ->
     count(StoreRef, Timeout + 100);

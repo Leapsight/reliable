@@ -29,18 +29,18 @@
 
 -define(POOLNAME, reliable).
 
--export([init/0]).
--export([enqueue/3]).
--export([enqueue/4]).
--export([get/3]).
+-export([count/3]).
 -export([delete/3]).
 -export([delete_all/3]).
--export([update/3]).
--export([update/4]).
--export([list/3]).
+-export([enqueue/3]).
+-export([enqueue/4]).
 -export([flush/2]).
 -export([fold/5]).
--export([count/3]).
+-export([get/3]).
+-export([init/0]).
+-export([list/3]).
+-export([update/3]).
+-export([update/4]).
 
 
 
@@ -91,7 +91,7 @@ enqueue(Ref, Bucket, Work) ->
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
     Work :: reliable_work:t(),
-    PoolOpts :: riak_pool:opts()) -> ok | {error, any()}.
+    PoolOpts :: riak_pool:exec_opts()) -> ok | {error, any()}.
 
 enqueue(Ref, Bucket, Work, Opts) ->
     WorkId = reliable_work:id(Work),
@@ -99,6 +99,7 @@ enqueue(Ref, Bucket, Work, Opts) ->
     Fun = fun(Pid) ->
         Object = riakc_obj:new(Bucket, WorkId, term_to_binary(Work)),
 
+        %% eqwalizer:ignore Object
         case riakc_pb_socket:put(Pid, Object) of
             ok ->
                 ok;
@@ -114,8 +115,10 @@ enqueue(Ref, Bucket, Work, Opts) ->
         end
     end,
 
+    %% eqwalizer:ignore Ref
     case riak_pool:execute(Ref, Fun, Opts) of
         {ok, Result} ->
+            %% eqwalizer:ignore Result
             Result;
 
         {error, _} = Error ->
@@ -142,8 +145,10 @@ get(Ref, Bucket, WorkId) ->
         get_work(Pid, Bucket, WorkId, [])
     end,
 
+    %% eqwalizer:ignore Ref
     case riak_pool:execute(Ref, Fun, Opts) of
         {ok, Result} ->
+            %% eqwalizer:ignore Result
             Result;
         {error, _} = Error ->
             %% If busy do retries
@@ -182,6 +187,7 @@ delete(Ref, Bucket, WorkId) when is_atom(Ref) ->
 
     case riak_pool:execute(Ref, Fun, Opts) of
         {ok, Result} ->
+            %% eqwalizer:ignore Result
             Result;
         {error, _} = Error ->
             %% If busy do retries
@@ -217,8 +223,10 @@ delete_all(Ref, Bucket, WorkIds) ->
         ok
     end,
 
+    %% eqwalizer:ignore Ref
     case riak_pool:execute(Ref, Fun, Opts) of
         {ok, Result} ->
+            %% eqwalizer:ignore Result
             Result;
 
         {error, _} = Error ->
@@ -269,8 +277,10 @@ update(Ref, Bucket, Work, Opts) ->
         end
     end,
 
+    %% eqwalizer:ignore Ref
     case riak_pool:execute(Ref, Fun, Opts) of
         {ok, Result} ->
+            %% eqwalizer:ignore Result
             Result;
 
         {error, _} = Error ->
@@ -286,7 +296,7 @@ update(Ref, Bucket, Work, Opts) ->
 -spec count(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
-    Opts :: map()) -> Count :: integer() | {error, Reason :: any()}.
+    Opts :: map()) -> {ok, Count :: integer()} | {error, Reason :: any()}.
 
 count(Ref, Bucket, Opts) ->
     PoolOpts = #{timeout => ?DEFAULT_TIMEOUT},
@@ -305,20 +315,15 @@ count(Ref, Bucket, Opts) ->
 
         case riakc_pb_socket:mapred(Pid, Inputs, Query, Timeout) of
             {ok, [{0, [Count]}]} ->
-                Count;
+                {ok, Count};
 
             {error, Reason} ->
                 {error, format_reason(Reason)}
         end
     end,
 
-    case riak_pool:execute(Ref, Fun, PoolOpts) of
-        {ok, Result} ->
-            Result;
-        {error, _} = Error ->
-            %% If busy do retries
-            Error
-    end.
+    %% eqwalizer:ignore Ref
+    riak_pool:execute(Ref, Fun, PoolOpts).
 
 
 %% -----------------------------------------------------------------------------
@@ -329,14 +334,15 @@ count(Ref, Bucket, Opts) ->
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: {ok, [reliable_work:t()], Continuation :: continuation()}
+    List :: {ok, {[reliable_work:t()], Continuation :: continuation()}}
     | {error, Reason :: any()}.
 
 list(Ref, Bucket, Opts) ->
     Fun = fun({_K, V}, Acc) -> [V | Acc] end,
 
     case fold(Ref, Bucket, Fun, [], Opts) of
-        {ok, {L, Cont}} ->
+        {ok, {L, Cont}} when is_list(L) ->
+            %% eqwalizer:ignore
             {ok, {lists:reverse(L), Cont}};
         {error, _} = Error ->
             Error
@@ -433,6 +439,7 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
                             Acc1
                     end
                 end,
+                %% eqwalizer:ignore Ref Keys
                 {ok, {lists:foldl(FoldFun, Acc, Keys), Cont1}};
             {error, Reason} ->
                 {error, format_reason(Reason)}
@@ -442,8 +449,10 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
 
     PoolOpts = #{timeout => ?DEFAULT_TIMEOUT},
 
+    %% eqwalizer:ignore Ref
     case riak_pool:execute(Ref, Fun, PoolOpts) of
         {ok, {ok, _} = OK} ->
+            %% eqwalizer:ignore OK
             OK;
         {ok, {error, _} = Error} ->
             Error;

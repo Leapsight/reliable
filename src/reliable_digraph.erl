@@ -18,14 +18,9 @@
 %% --------------------------------------------------------------
 
 %% -----------------------------------------------------------------------------
-%% @doc An implementation of digraph.erl using dict instead of ets tables.
+%% @doc An implementation of digraph.erl using maps instead of ets tables.
 %% The idea is to use this implementation when the data structure needs to be
 %% passed between processes and | or is required to be persisted as a binary.
-%%
-%% Use Cases that require this data module:
-%%
-%% * Generation and storage of a datalog programme dependency graph
-%% * Generation and storage of a datalog programme QSQ Net Structure (QSQN)
 %%
 %% **Notes**:
 %% The API is not strictly compatible with digraph.erl as all operations return
@@ -38,9 +33,9 @@
 
 
 -record(reliable_digraph, {
-  vtree = dict:new()            ::  dict:dict(),
-  etree = dict:new()            ::  dict:dict(),
-  ntree = dict:new()            ::  dict:dict(),
+  vtree = maps:new()            ::  map(),
+  etree = maps:new()            ::  map(),
+  ntree = maps:new()            ::  map(),
   cyclic = true                 ::  boolean(),
   vseq = 0                      ::  non_neg_integer(),
   eseq = 0                      ::  non_neg_integer(),
@@ -48,7 +43,7 @@
 }).
 
 -record(reliable_digraph_view, {
-  edges = undefined             ::  dict:dict(),
+  edges = undefined             ::  map() | undefined,
   vers = 0                      ::  non_neg_integer()
 }).
 
@@ -135,6 +130,9 @@
 -export([topsort/1]).
 
 
+-eqwalizer({nowarn_function, maybe_update/3}).
+
+
 %% ============================================================================
 %% API
 %% ============================================================================
@@ -200,7 +198,7 @@ info(G) ->
 -spec vertex(G :: t(), V :: vertex()) -> {vertex(), label()} | 'false'.
 
 vertex(G, V) ->
-    case dict:find(V, G#reliable_digraph.vtree) of
+    case maps:find(V, G#reliable_digraph.vtree) of
         error ->
             false;
         {ok, Label} ->
@@ -215,7 +213,7 @@ vertex(G, V) ->
 -spec no_vertices(G :: t()) -> non_neg_integer().
 
 no_vertices(G) ->
-    dict:size(G#reliable_digraph.vtree).
+    maps:size(G#reliable_digraph.vtree).
 
 
 %% -----------------------------------------------------------------------------
@@ -225,7 +223,7 @@ no_vertices(G) ->
 -spec vertices(G :: t()) -> [vertex()].
 
 vertices(G) ->
-    dict:fetch_keys(G#reliable_digraph.vtree).
+    maps:keys(G#reliable_digraph.vtree).
 
 
 %% -----------------------------------------------------------------------------
@@ -255,7 +253,7 @@ sink_vertices(G) ->
 -spec has_vertex(G :: t(), V::vertex()) -> boolean().
 
 has_vertex(G, V) ->
-    dict:is_key(V, G#reliable_digraph.vtree).
+    maps:is_key(V, G#reliable_digraph.vtree).
 
 
 %% -----------------------------------------------------------------------------
@@ -268,6 +266,7 @@ has_vertex(G, V) ->
 add_vertex(G) ->
     % We create a new vertex id by increasing G's vseq number
     K = G#reliable_digraph.vseq + 1,
+    %% eqwalizer:ignore improper list
     V = ['$v' | K],
     {V, add_vertex(G#reliable_digraph{vseq=K}, V, [])}.
 
@@ -289,7 +288,7 @@ add_vertex(G, V) ->
 -spec add_vertex(G :: t(), V::vertex(), Label::label()) -> t().
 
 add_vertex(G, V, L) ->
-    G#reliable_digraph{vtree = dict:store(V, L, G#reliable_digraph.vtree)}.
+    G#reliable_digraph{vtree = maps:put(V, L, G#reliable_digraph.vtree)}.
 
 
 %% -----------------------------------------------------------------------------
@@ -366,7 +365,7 @@ del_vertices(G, Vs) when is_list(Vs) ->
   {edge(), vertex(), vertex(), label()} | 'false'.
 
 edge(G, V) ->
-    case dict:find(V, G#reliable_digraph.etree) of
+    case maps:find(V, G#reliable_digraph.etree) of
         error -> false;
         {ok, {V1, V2, Label}} -> {V, V1, V2, Label}
     end.
@@ -379,7 +378,7 @@ edge(G, V) ->
 -spec no_edges(G :: t()) -> non_neg_integer().
 
 no_edges(G) ->
-    dict:size(G#reliable_digraph.etree).
+    maps:size(G#reliable_digraph.etree).
 
 
 %% -----------------------------------------------------------------------------
@@ -389,7 +388,7 @@ no_edges(G) ->
 -spec edges(G :: t()) -> [edge()].
 
 edges(G) ->
-    dict:fetch_keys(G#reliable_digraph.etree).
+    maps:keys(G#reliable_digraph.etree).
 
 
 %% -----------------------------------------------------------------------------
@@ -409,7 +408,7 @@ edges(G, V) ->
 -spec has_edge(G :: t(), E::edge()) -> boolean().
 
 has_edge(G, E) ->
-    dict:is_key(E, G#reliable_digraph.etree).
+    maps:is_key(E, G#reliable_digraph.etree).
 
 
 %% -----------------------------------------------------------------------------
@@ -419,7 +418,7 @@ has_edge(G, E) ->
 -spec out_edges(G :: t(), V::vertex()) -> [edge()].
 
 out_edges(G, V) ->
-    case dict:find({out, V}, G#reliable_digraph.ntree) of
+    case maps:find({out, V}, G#reliable_digraph.ntree) of
         error -> [];
         {ok, List} -> List
     end.
@@ -432,7 +431,7 @@ out_edges(G, V) ->
 -spec in_edges(G :: t(), V::vertex()) -> [edge()].
 
 in_edges(G, V) ->
-    case dict:find({in, V}, G#reliable_digraph.ntree) of
+    case maps:find({in, V}, G#reliable_digraph.ntree) of
         error -> [];
         {ok, List} -> List
     end.
@@ -531,6 +530,7 @@ add_edge(G, E, V1, V2, Label) ->
 
 do_add_edge(G, [], V1, V2, Label) ->
     K = G#reliable_digraph.eseq + 1,
+    %% eqwalizer:ignore improper list
     E = ['$e' | K],
     do_add_edge(G#reliable_digraph{eseq=K}, E, V1, V2, Label);
 
@@ -613,7 +613,7 @@ del_edges(G, V1, V2) ->
 
 %% @private
 del_edges_aux(G, [H|T], V1, V2) ->
-    case dict:find(H, G#reliable_digraph.etree) of
+    case maps:find(H, G#reliable_digraph.etree) of
         {ok, {V1, V2, _Label}}  ->
             del_edges_aux(do_del_edge(G, H), T, V1, V2);
         _ ->
@@ -650,14 +650,16 @@ reverse_edges(G0, Edges) when is_list(Edges) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec get_cycle(G :: t(), V::vertex()) -> [vertex()].
+-spec get_cycle(G :: t(), V::vertex()) -> [vertex()] | false.
 
 get_cycle(G, V) ->
     case one_path(out_neighbours(G, V), V, [], [V], [V], 2, G, 1) of
         false ->
             case lists:member(V, out_neighbours(G, V)) of
-                true -> [V];
-                false -> false
+                true ->
+                    [V];
+                false ->
+                    false
             end;
         Vs ->
             Vs
@@ -723,7 +725,7 @@ del_path(G, V1, V2) ->
     [vertex()].
 
 filter_vertices(G, Pred) ->
-    dict:fetch_keys(dict:filter(Pred, G#reliable_digraph.vtree)).
+    maps:keys(maps:filter(Pred, G#reliable_digraph.vtree)).
 
 
 %% -----------------------------------------------------------------------------
@@ -735,7 +737,7 @@ filter_vertices(G, Pred) ->
     [vertex()].
 
 filter_vertex_labels(G, Pred) ->
-    dict:to_list(dict:filter(Pred, G#reliable_digraph.vtree)).
+    maps:to_list(maps:filter(Pred, G#reliable_digraph.vtree)).
 
 
 %% -----------------------------------------------------------------------------
@@ -747,7 +749,7 @@ filter_vertex_labels(G, Pred) ->
     Pred::fun((Edge::edge(), Value::{vertex(), vertex(), label()}) -> boolean())) -> [edge()].
 
 filter_edges(G, Pred) ->
-    dict:fetch_keys(dict:filter(Pred, G#reliable_digraph.etree)).
+    maps:keys(maps:filter(Pred, G#reliable_digraph.etree)).
 
 
 %% -----------------------------------------------------------------------------
@@ -759,7 +761,7 @@ filter_edges(G, Pred) ->
     Pred::fun((Edge::edge(), Value::{vertex(), vertex(), label()}) -> boolean())) -> [edge()].
 
 filter_edge_labels(G, Pred) ->
-    dict:to_list(dict:filter(Pred, G#reliable_digraph.etree)).
+    maps:to_list(maps:filter(Pred, G#reliable_digraph.etree)).
 
 
 
@@ -775,11 +777,11 @@ filter_edge_labels(G, Pred) ->
 fold(G, Fun, Acc0) ->
     VT = G#reliable_digraph.vtree,
     Adapter = fun(K, {V1, V2, Label}, Acc) ->
-        VL1 = dict:fetch(V1, VT),
-        VL2 = dict:fetch(V2, VT),
+        VL1 = maps:get(V1, VT),
+        VL2 = maps:get(V2, VT),
         Fun({K, {V1, VL1}, {V2, VL2}, Label}, Acc)
     end,
-    dict:fold(Adapter, Acc0, G#reliable_digraph.etree).
+    maps:fold(Adapter, Acc0, G#reliable_digraph.etree).
 
 
 %% -----------------------------------------------------------------------------
@@ -793,13 +795,13 @@ fold(G, Fun, Acc0) ->
 
 view(G, EdgesOrPred) when is_list(EdgesOrPred) ->
     #reliable_digraph_view{
-        edges = dict:filter(fun(K, _V)-> lists:member(K, EdgesOrPred) end, G#reliable_digraph.etree),
+        edges = maps:filter(fun(K, _V)-> lists:member(K, EdgesOrPred) end, G#reliable_digraph.etree),
         vers = G#reliable_digraph.vers
     };
 
 view(G, EdgesOrPred) when is_function(EdgesOrPred, 2) ->
     #reliable_digraph_view{
-        edges = dict:filter(EdgesOrPred, G#reliable_digraph.etree),
+        edges = maps:filter(EdgesOrPred, G#reliable_digraph.etree),
         vers = G#reliable_digraph.vers
     }.
 
@@ -808,17 +810,21 @@ view(G, EdgesOrPred) when is_function(EdgesOrPred, 2) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+fold_view(_, #reliable_digraph_view{edges = undefined} = View, _, Acc) ->
+    Acc;
+
 fold_view(G, View, Fun, Acc0) ->
     G#reliable_digraph.vers =:= View#reliable_digraph_view.vers
     orelse erlang:exit("View out-of-date."),
 
     VT = G#reliable_digraph.vtree,
     Adapter = fun(K, {V1, V2, Label}, Acc) ->
-        VL1 = dict:fetch(V1, VT),
-        VL2 = dict:fetch(V2, VT),
+        VL1 = maps:get(V1, VT),
+        VL2 = maps:get(V2, VT),
         Fun({K, {V1, VL1}, {V2, VL2}, Label}, Acc)
     end,
-    dict:fold(Adapter, Acc0, View#reliable_digraph_view.edges).
+    %% eqwalizer:ignore View
+    maps:fold(Adapter, Acc0, View#reliable_digraph_view.edges).
 
 
 %% ==========================================================================
@@ -827,7 +833,7 @@ fold_view(G, View, Fun, Acc0) ->
 
 %% @private
 add_edge_to_etree(G, E, Value={_V1, _V2, _Label}) ->
-    ET = dict:store(E, Value, G#reliable_digraph.etree),
+    ET = maps:put(E, Value, G#reliable_digraph.etree),
     G#reliable_digraph{etree = ET}.
 
 
@@ -835,27 +841,27 @@ add_edge_to_etree(G, E, Value={_V1, _V2, _Label}) ->
 add_edge_to_ntree(G, E, {V1, V2, _Label}) ->
     NT = G#reliable_digraph.ntree,
     Adder = fun(X, Acc) ->
-        dict:update(X, fun(Edges) -> [E|Edges] end, [E], Acc)
+        maps:update_with(X, fun(Edges) -> [E|Edges] end, [E], Acc)
     end,
     G#reliable_digraph{ntree=Adder({in, V2}, Adder({out, V1}, NT))}.
 
 
 %% @private
 remove_vertex_from_vtree(G, V) ->
-  NewVT = dict:erase(V, G#reliable_digraph.vtree),
+  NewVT = maps:remove(V, G#reliable_digraph.vtree),
   G#reliable_digraph{vtree=NewVT}.
 
 
 %% @private
 remove_vertex_from_ntree(G, V) ->
-    NT = dict:erase({in, V}, G#reliable_digraph.ntree),
-    NewNT = dict:erase({out, V}, NT),
+    NT = maps:remove({in, V}, G#reliable_digraph.ntree),
+    NewNT = maps:remove({out, V}, NT),
     G#reliable_digraph{ntree=NewNT}.
 
 
 %% @private
 remove_edge_from_etree(G, E) ->
-    NewET = dict:erase(E, G#reliable_digraph.etree),
+    NewET = maps:remove(E, G#reliable_digraph.etree),
     G#reliable_digraph{etree=NewET}.
 
 
@@ -864,17 +870,17 @@ remove_edge_from_ntree(G, E) ->
     NT = G#reliable_digraph.ntree,
     {E, V1, V2, _Label} = edge(G, E),
     Deleter = fun(X, Acc) ->
-        case dict:find(X, Acc) of
+        case maps:find(X, Acc) of
             error ->
                 Acc;
             {ok, [E]} ->
-                dict:erase(X, Acc);
+                maps:remove(X, Acc);
             {ok, List} when is_list(List) ->
                 case lists:subtract(List, [E]) of
                     [] ->
-                    dict:erase(X, Acc);
+                    maps:remove(X, Acc);
                     NewList ->
-                    dict:store(X, NewList, Acc)
+                    maps:put(X, NewList, Acc)
                 end;
             _Other ->
                 Acc
@@ -896,7 +902,7 @@ remove_edges_in_path(G, _) ->
 %% @private
 collect_vertices(G, Direction) ->
         Fun = fun(V, Acc) ->
-            case dict:is_key({Direction, V}, G#reliable_digraph.ntree) of
+            case maps:is_key({Direction, V}, G#reliable_digraph.ntree) of
                     true -> Acc;
                     false -> [V|Acc]
             end
@@ -912,7 +918,7 @@ collect_neighbours(G, Edges) ->
 %% @private
 collect_neighbours(G, [H|T], Acc) ->
     ET = G#reliable_digraph.etree,
-    case dict:find(H, ET) of
+    case maps:find(H, ET) of
         error -> collect_neighbours(G, T, Acc);
         {ok, Val} -> collect_neighbours(G, T, [Val|Acc])
     end;
@@ -1197,12 +1203,12 @@ condensation(G) ->
     %% Each component is assigned a number.
     %% V2I: from vertex to number.
     %% I2C: from number to component.
-    V2I = dict:new(),
-    I2C = dict:new(),
+    V2I = maps:new(),
+    I2C = maps:new(),
 
     CFun = fun(SC, {V2I0, I2C0, N}) ->
-        V2I1 = lists:foldl(fun(V, Acc) -> dict:store(V, N, Acc) end, V2I0, SC),
-        I2C1 = dict:store(N, SC, I2C0),
+        V2I1 = lists:foldl(fun(V, Acc) -> maps:put(V, N, Acc) end, V2I0, SC),
+        I2C1 = maps:put(N, SC, I2C0),
         {V2I1, I2C1, N + 1}
     end,
 
@@ -1383,12 +1389,12 @@ subgraph_edge(E, G, SG, Keep) ->
 	end.
 
 
--spec condense(list(), t(), t(), dict:dict(), dict:dict()) ->
+-spec condense(list(), t(), t(), map(), map()) ->
 	t().
 
 condense(SC, G, SCG0, V2I, I2C) ->
 	NFun = fun(Neighbour, Acc) ->
-		[{_V, I}] = dict:fetch(Neighbour, V2I),
+		[{_V, I}] = maps:get(Neighbour, V2I),
 		[I| Acc]
 	end,
 	VFun = fun(V, VAcc) ->
@@ -1400,7 +1406,7 @@ condense(SC, G, SCG0, V2I, I2C) ->
     SCG1 = add_vertex(SCG0, SC),
 
 	FoldFun = fun(I, SCGA0) ->
-		[{_, C}] = dict:fetch(I, I2C),
+		[{_, C}] = maps:get(I, I2C),
 	 	SCGA1 = add_vertex(SCGA0, C),
 	 	case C =/= SC of
 	 		true ->

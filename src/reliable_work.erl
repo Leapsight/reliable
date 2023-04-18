@@ -215,7 +215,7 @@ tasks(#reliable_work{tasks = Val}) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec nbr_of_tasks(t()) -> [{pos_integer(), reliable_task:t()}].
+-spec nbr_of_tasks(t()) -> integer().
 
 nbr_of_tasks(#reliable_work{tasks = Val}) ->
     maps:size(Val).

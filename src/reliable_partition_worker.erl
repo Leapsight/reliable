@@ -61,6 +61,8 @@
 -export([terminate/2]).
 -export([code_change/3]).
 
+-eqwalizer({nowarn_function, maybe_update/3}).
+
 
 
 %% =============================================================================
@@ -70,7 +72,7 @@
 
 -spec start_link(
     WorkerName :: atom(), StoreRef :: atom(), Bucket :: binary()) ->
-    {ok, pid()} | {error, any()}.
+    {ok, pid()} | ignore | {error, any()}.
 
 start_link(WorkerName, StoreRef, Bucket) ->
     gen_server:start_link({local, WorkerName}, ?MODULE, [StoreRef, Bucket], []).
@@ -85,22 +87,22 @@ start_link(WorkerName, StoreRef, Bucket) ->
 
 init([StoreRef, Bucket]) ->
     ?LOG_DEBUG("Initializing partition store; partition=~p", [Bucket]),
+    Continue = {get_db_connection, [StoreRef, Bucket]},
+    {ok, undefined, {continue, Continue}}.
+
+
+handle_continue({get_db_connection, [StoreRef, Bucket]}, undefined) ->
+    Conn = get_db_connection(),
+
+    %% Initialize symbolic variable dict.
+    Symbolics = dict:store(riakc, Conn, dict:new()),
 
     State0 = #state{
         store_ref = StoreRef,
-        bucket = Bucket
-    },
-    State1 = reset_work_state(State0),
-    {ok, State1, {continue, get_db_connection}}.
-
-
-handle_continue(get_db_connection, State0) ->
-    Conn = get_db_connection(),
-    %% Initialize symbolic variable dict.
-    Symbolics = dict:store(riakc, Conn, dict:new()),
-    State1 = State0#state{
+        bucket = Bucket,
         symbolics = Symbolics
     },
+    State1 = reset_work_state(State0),
     {noreply, State1, {continue, schedule_work}};
 
 handle_continue(schedule_work, State0) ->
@@ -184,6 +186,9 @@ get_db_connection() ->
 schedule_work(State) ->
     Floor = reliable_config:get(pull_backoff_min, 2000),
     Ceiling = reliable_config:get(pull_backoff_max, 60000),
+
+    is_integer(Floor) andalso is_integer(Ceiling) orelse error(badarg),
+
     %% Will send ourselves a message {timeout, Ref, fetch_work}
     %% that we will handle in handle_info/2
     B = backoff:type(
@@ -201,7 +206,9 @@ schedule_work(State) ->
     }.
 
 
-schedule_work(succeed, #state{fetch_backoff = B0} = State) ->
+%% @private
+schedule_work(succeed, #state{fetch_backoff = B0} = State)
+when B0 =/= undefined ->
     {_, B1} = backoff:succeed(B0),
     ?LOG_DEBUG(#{
         pid => self(),
@@ -213,7 +220,8 @@ schedule_work(succeed, #state{fetch_backoff = B0} = State) ->
         fetch_timer_ref = backoff:fire(B1)
     };
 
-schedule_work(fail, #state{fetch_backoff = B0} = State) ->
+schedule_work(fail, #state{fetch_backoff = B0} = State)
+when B0 =/= undefined ->
     {_, B1} = backoff:fail(B0),
     ?LOG_DEBUG(#{
         pid => self(),
@@ -330,14 +338,7 @@ process_work(Work, {Acc, State0}) ->
 
 %% @private
 reset_work_state(State) ->
-    WorkState = #{
-        last_ok => true,
-        work => undefined,
-        completed => [],
-        count => 0,
-        nbr_of_tasks => 0
-    },
-    State#state{work_state = WorkState}.
+    State#state{work_state = undefined}.
 
 
 %% @private
@@ -381,7 +382,6 @@ process_tasks(Last, #state{work_state = #{last_ok := true} = WS0} = State) ->
     }),
 
     case reliable_task:result(Task0) of
-
         undefined ->
             {Bool, NewWork} = do_process_task({TaskId, Task0}, State),
             WS1 = WS0#{

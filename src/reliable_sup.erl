@@ -128,6 +128,8 @@ add_riak_pool() ->
         Term when is_map(Term) ->
             Term
     end,
+
+    %% eqwalizer:ignore Config
     case riak_pool:add_pool(reliable, Config) of
         ok ->
             ok;

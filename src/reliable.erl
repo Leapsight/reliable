@@ -44,7 +44,7 @@
                                 partition_key => binary(),
                                 event_payload => any(),
                                 subscribe => boolean(),
-                                %% riak_pool:opts()
+                                %% riak_pool:exec_opts()
                                 deadline => pos_integer(),
                                 timeout => pos_integer(),
                                 max_retries => non_neg_integer(),
@@ -494,6 +494,7 @@ get_workflow_item(Id) ->
     ok = ensure_in_workflow(),
     case reliable_digraph:vertex(get(?WORKFLOW_GRAPH), Id) of
         {Id, _} = Item ->
+            %% eqwalizer:ignore
             Item;
         false ->
             error(badkey)
@@ -513,6 +514,7 @@ find_workflow_item(Id) ->
     ok = ensure_in_workflow(),
     case reliable_digraph:vertex(get(?WORKFLOW_GRAPH), Id) of
         {Id, _} = Item ->
+            %% eqwalizer:ignore
             {ok, Item};
         false ->
             error
@@ -690,6 +692,7 @@ enqueue_workflow(Opts) ->
                 work_id => get(?WORKFLOW_ID),
                 event_payload => get_workflow_event_payload()
             },
+            %% eqwalizer:ignore NewOpts
             case enqueue(Tasks, NewOpts) of
                 {ok, WorkRef} ->
                     {top, true, WorkRef};
