@@ -86,17 +86,22 @@ start_link(WorkerName, StoreRef, Bucket) ->
 init([StoreRef, Bucket]) ->
     ?LOG_DEBUG("Initializing partition store; partition=~p", [Bucket]),
 
+    State0 = #state{
+        store_ref = StoreRef,
+        bucket = Bucket
+    },
+    State1 = reset_work_state(State0),
+    {ok, State1, {continue, get_db_connection}}.
+
+
+handle_continue(get_db_connection, State0) ->
     Conn = get_db_connection(),
     %% Initialize symbolic variable dict.
     Symbolics = dict:store(riakc, Conn, dict:new()),
-    State0 = #state{
-        store_ref = StoreRef,
-        bucket = Bucket,
+    State1 = State0#state{
         symbolics = Symbolics
     },
-    State1 = reset_work_state(State0),
-    {ok, State1, {continue, schedule_work}}.
-
+    {noreply, State1, {continue, schedule_work}};
 
 handle_continue(schedule_work, State0) ->
     State1 = schedule_work(State0),
