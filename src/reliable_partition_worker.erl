@@ -89,7 +89,7 @@ init([StoreRef, Bucket]) ->
     ?LOG_DEBUG("Initializing partition store; partition=~p", [Bucket]),
     Continue = {get_riak_connection, [StoreRef, Bucket]},
 
-    ok = logger:update__process_metadata(#{partition => Bucket}),
+    ok = logger:update_process_metadata(#{partition => Bucket}),
 
     {ok, undefined, {continue, Continue}}.
 
