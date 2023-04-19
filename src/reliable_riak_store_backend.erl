@@ -417,7 +417,8 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
                                         description =>
                                             "Couldn't retrieve work from store "
                                             "(not an error, case of a stale "
-                                            "$bucket index, item in cache).",
+                                            "$bucket index, work found in "
+                                            "cache).",
                                         backend => ?MODULE,
                                         reason => Reason,
                                         partition => Bucket,
@@ -441,6 +442,7 @@ fold(Ref, Bucket, Function, Acc, Opts) ->
                 end,
                 %% eqwalizer:ignore Ref Keys
                 {ok, {lists:foldl(FoldFun, Acc, Keys), Cont1}};
+
             {error, Reason} ->
                 {error, format_reason(Reason)}
         end
