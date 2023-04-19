@@ -38,12 +38,13 @@
 
 
 %% API
+-export([args/1]).
+-export([function/1]).
+-export([has_result/1]).
+-export([is_type/1]).
+-export([module/1]).
 -export([new/4]).
 -export([node/1]).
--export([module/1]).
--export([function/1]).
--export([args/1]).
--export([is_type/1]).
 -export([result/1]).
 -export([set_result/2]).
 
@@ -123,6 +124,17 @@ function(#reliable_task{function = Val}) -> Val.
 -spec result(Task :: t()) -> term().
 
 result(#reliable_task{result = Val}) -> Val.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec has_result(Task :: t()) -> boolean
+
+has_result(#reliable_task{result = Val}) ->
+    Val =/= undefined.
+
 
 
 %% -----------------------------------------------------------------------------
