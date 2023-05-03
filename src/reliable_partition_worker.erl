@@ -160,8 +160,9 @@ code_change(_OldVsn, State, _Extra) ->
 get_db_connection() ->
     Host = reliable_config:riak_host(),
     Port = reliable_config:riak_port(),
+    Opts = [{keepalive, true}],
 
-    {ok, Conn} = riakc_pb_socket:start_link(Host, Port),
+    {ok, Conn} = riakc_pb_socket:start_link(Host, Port, Opts),
     %% Crashes
     pong = riakc_pb_socket:ping(Conn),
     ?LOG_DEBUG(#{
