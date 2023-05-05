@@ -108,6 +108,7 @@
 -export([yield/2]).
 
 
+
 %% =============================================================================
 %% API
 %% =============================================================================
@@ -162,7 +163,8 @@ when is_list(Tasks) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
     StoreRef = binary_to_atom(reliable_config:partition(PartitionKey), utf8),
     WorkRef = reliable_work:ref(StoreRef, Work),
 
-    Subscribed = maybe_subscribe(WorkRef, Opts),
+    %% TODO remove false equality when subscriptions are implemented
+    false = _Subscribed = maybe_subscribe(WorkRef, Opts),
 
     try reliable_partition_store:enqueue(StoreRef, Work, Opts, Timeout) of
         {ok, WorkRef} ->
@@ -170,9 +172,9 @@ when is_list(Tasks) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
         {error, Reason} ->
             throw(Reason)
     catch
-        _:Reason when Subscribed ->
-            ok = unsubscribe(WorkRef),
-            {error, Reason};
+        %% _:Reason when Subscribed == true ->
+        %%     ok = unsubscribe(WorkRef),
+        %%     {error, Reason};
         _:Reason ->
             {error, Reason}
     end.
@@ -838,9 +840,8 @@ maybe_subscribe(_WorkRef, _Opts) ->
     false.
 
 
-%% @private
-unsubscribe(_WorkRef) ->
-    ok.
+%% unsubscribe(_WorkRef) ->
+%%     ok.
 
 
 %% @private

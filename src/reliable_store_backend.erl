@@ -23,8 +23,10 @@
 %% -----------------------------------------------------------------------------
 -module(reliable_store_backend).
 
+-include("reliable.hrl").
 
 -type ref()             ::  pid() | reference() | atom().
+-type opts()            ::  optional(any()).
 -type error_reason()    ::  busy | disconnected | timeout
                             | invalid_datatype | any().
 
@@ -40,70 +42,51 @@
 
 -callback init() -> {ok, ref()} | {error, Reason :: any()}.
 
-
--callback enqueue(
-    Ref :: ref(),
-    Bucket :: binary(),
-    Work :: reliable_work:t()) ->
-    ok | {error, Reason :: error_reason()}.
-
-
 -callback enqueue(
     Ref :: ref(),
     Bucket :: binary(),
     Work :: reliable_work:t(),
-    Opts :: any()) ->
+    Opts :: opts()) ->
     ok | {error, Reason :: error_reason()}.
-
 
 -callback get(
     Ref :: ref(),
     Bucket :: binary(),
-    WorkId :: reliable_work:id()) ->
+    WorkId :: reliable_work:id(),
+    Opts :: opts()) ->
     {ok, term()} | {error, not_found | any()}.
-
 
 -callback delete(
     Ref :: ref(),
     Bucket :: binary(),
-    WorkId :: reliable_work:id()) -> ok | {error, Reason :: any()}.
-
+    WorkId :: reliable_work:id(),
+    Opts :: opts()) -> ok | {error, Reason :: any()}.
 
 -callback delete_all(
     Ref :: ref(),
     Bucket :: binary(),
-    AllCompleted :: [reliable_work:id()]) -> ok | {error, Reason :: any()}.
-
-
--callback update(
-    Ref :: ref(),
-    Bucket :: binary(),
-    Work :: reliable_work:t()) -> ok | {error, Reason :: error_reason()}.
-
+    AllCompleted :: [reliable_work:id()],
+    Opts :: opts()) -> ok | {error, Reason :: any()}.
 
 -callback update(
     Ref :: ref(),
     Bucket :: binary(),
     Work :: reliable_work:t(),
-    Opts :: any()) -> ok | {error, Reason :: error_reason()}.
+    Opts :: opts()) -> ok | {error, Reason :: error_reason()}.
 
 
--callback count(
-    Ref :: ref(),
-    Bucket :: binary(),
-    Opts :: map()) ->
+-callback count(Ref :: ref(), Bucket :: binary(), Opts :: opts()) ->
     {ok, Count :: integer()} | {error, Reason :: any()}.
-
 
 -callback list(
     Ref :: ref(),
     Bucket :: binary(),
-    Opts :: map()) ->
+    Opts :: opts()) ->
     {ok, {[reliable_work:t()], Continuation :: any()}}
     | {error, Reason :: any()}.
 
 
--callback flush(Ref :: ref(), Bucket :: binary()) ->
+-callback flush(Ref :: ref(), Bucket :: binary(), Opts :: opts()) ->
     ok | {error, Reason :: any()}.
 
 
@@ -112,6 +95,6 @@
     Bucket :: binary(),
     Fun :: function(),
     Acc :: any(),
-    Opts :: map()) ->
+    Opts :: opts()) ->
     {ok, {NewAcc :: any(), Continuation :: any()}} | {error, Reason :: any()}.
 

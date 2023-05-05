@@ -45,17 +45,18 @@
 %% API
 -export([add_task/3]).
 -export([event_payload/1]).
+-export([from_term/1]).
 -export([id/1]).
 -export([is_type/1]).
+-export([nbr_of_tasks/1]).
 -export([new/0]).
 -export([new/1]).
 -export([new/2]).
 -export([new/3]).
 -export([ref/2]).
--export([tasks/1]).
--export([nbr_of_tasks/1]).
--export([update_task/3]).
 -export([status/1]).
+-export([tasks/1]).
+-export([update_task/3]).
 
 
 
@@ -133,7 +134,7 @@ new(Id, Tasks, EventPayload) when is_binary(Id) ->
 %% @doc Returns `true' if `Arg' is a work object. Otherwise, returns `false'.
 %% @end
 %% -----------------------------------------------------------------------------
--spec is_type(Arg :: t()) -> boolean().
+-spec is_type(Arg :: term()) -> boolean().
 
 is_type(#reliable_work{}) -> true;
 is_type(_) -> false.
@@ -162,18 +163,24 @@ ref(StoreRef, #reliable_work{id = Id}) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec add_task(Order :: pos_integer(), Task :: reliable_task:t(), Work :: t()) -> t().
+-spec add_task(
+    Order :: pos_integer(), Task :: reliable_task:t(), Work :: t()) ->
+    t() | no_return().
 
-add_task(Order, Task, #reliable_work{tasks = Tasks} = Work)
+add_task(Order, Task0, #reliable_work{tasks = Tasks} = Work)
 when is_integer(Order) andalso Order > 0 ->
-    case reliable_task:is_type(Task) of
-        true ->
-            Work#reliable_work{
-                tasks = maps:put(Order, Task, Tasks)
-            };
-        false ->
-            error({badarg, Task})
-    end;
+    %% Upgrade task
+    Task =
+        case reliable_task:is_type(Task0) of
+            true ->
+                Task0;
+            false ->
+                reliable_task:from_term(Task0)
+        end,
+
+    Work#reliable_work{
+        tasks = maps:put(Order, Task, Tasks)
+    };
 
 add_task(Order, _, #reliable_work{}) ->
     error({badarg, Order});
@@ -189,16 +196,26 @@ add_task(_, _, Term) ->
 -spec update_task(Order :: pos_integer(), Task :: reliable_task:t(), Work :: t()) ->
     t() | no_return().
 
-update_task(Order, Task, #reliable_work{tasks = Tasks} = Work)
+update_task(Order, Task0, #reliable_work{tasks = Tasks} = Work)
 when is_integer(Order) andalso Order > 0 ->
-    case reliable_task:is_type(Task) of
-        true ->
-            Work#reliable_work{
-                tasks = maps:update(Order, Task, Tasks)
-            };
-        false ->
-            error({badarg, Task})
-    end.
+    %% Upgrade task
+    Task =
+        case reliable_task:is_type(Task0) of
+            true ->
+                Task0;
+            false ->
+                reliable_task:from_term(Task0)
+        end,
+
+    Work#reliable_work{
+        tasks = maps:update(Order, Task, Tasks)
+    };
+
+update_task(Order, _, #reliable_work{}) ->
+    error({badarg, Order});
+
+update_task(_, _, Term) ->
+    error({badarg, Term}).
 
 
 %% -----------------------------------------------------------------------------
@@ -239,13 +256,11 @@ event_payload(#reliable_work{event_payload = Val}) -> Val.
 status(#reliable_work{id = Id, tasks = Tasks, event_payload = Payload}) ->
     Remaining = maps:fold(
         fun(_, Task, Acc) ->
-            case reliable_task:result(Task) of
-                undefined ->
-                    Acc + 1;
-                _ ->
-                    %% TODO What if this task failed, did we killed it?
-                    %% check the algorithm
-                    Acc
+            case reliable_task:status(Task) of
+                completed ->
+                    Acc;
+                Status when Status == undefined; Status == failed ->
+                    Acc + 1
             end
         end,
         0,
@@ -257,3 +272,23 @@ status(#reliable_work{id = Id, tasks = Tasks, event_payload = Payload}) ->
         nbr_of_tasks_remaining => Remaining,
         event_payload => Payload
     }.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec from_term(any()) -> t() | no_return().
+
+from_term(#reliable_work{tasks = Tasks0} = Work) ->
+    Tasks = maps:map(
+        fun(_, V) ->
+            reliable_task:from_term(V)
+        end,
+        Tasks0
+    ),
+    Work#reliable_work{tasks = Tasks}.
+
+
+
+

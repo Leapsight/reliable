@@ -90,7 +90,7 @@ init([]) ->
         period => 5
     },
 
-    CacheOpts = [{n, 5}, {ttl, 30}],
+    CacheOpts = [{n, 5}, {ttl, 60}],
 
     ChildSpecs = [
         ?SUPERVISOR(

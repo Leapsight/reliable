@@ -29,36 +29,47 @@
 
 -record(state, {
     bucket                  ::  binary(),
+    dlq_bucket              ::  binary(),
     backend                 ::  module(),
-    backend_ref             ::  reference() | pid()
+    backend_ref             ::  reference() | pid(),
+    queue                   ::  reliable_queue:t() | undefined
 }).
 
 
--type list_opts()           ::  #{max_results => pos_integer()}.
-
+-type list_opts()           ::  optional(#{max_results => pos_integer()}).
+-type opts()                ::  optional(any()).
 
 %% API
--export([start_link/2]).
--export([enqueue/4]).
--export([list/2]).
--export([list/3]).
--export([flush_all/0]).
--export([flush/1]).
--export([flush/2]).
--export([update/2]).
--export([update/3]).
--export([delete/2]).
--export([delete/3]).
 -export([count/1]).
 -export([count/2]).
+-export([delete/2]).
+-export([delete/3]).
 -export([delete_all/2]).
 -export([delete_all/3]).
+-export([delete_all/4]).
+-export([enqueue/2]).
+-export([enqueue/3]).
+-export([enqueue/4]).
+-export([flush/1]).
+-export([flush/2]).
+-export([flush/3]).
+-export([flush_all/0]).
+-export([flush_all/1]).
+-export([list/1]).
+-export([list/2]).
+-export([list/3]).
+-export([move_to_dlq/3]).
+-export([move_to_dlq/4]).
+-export([start_link/2]).
 -export([status/1]).
 -export([status/2]).
 -export([status/3]).
+-export([update/2]).
+-export([update/3]).
 
 %% GEN_SERVER CALLBACKS
 -export([init/1]).
+-export([handle_continue/2]).
 -export([handle_call/3]).
 -export([handle_cast/2]).
 -export([handle_info/2]).
@@ -108,8 +119,8 @@ status(Bin, Timeout) when is_binary(Bin) ->
 
 status(WorkRef, Timeout) ->
     try reliable_work_ref:store_ref(WorkRef) of
-        StoreRef ->
-            status(StoreRef, WorkRef, Timeout)
+        Name ->
+            status(Name, WorkRef, Timeout)
     catch
         error:badref ->
             {error, badref}
@@ -121,14 +132,36 @@ status(WorkRef, Timeout) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec status(StoreRef :: atom(), WorkRef :: reliable_work_ref:t(), timeout()) ->
+-spec status(Name :: atom(), WorkRef :: reliable_work_ref:t(), timeout()) ->
     {in_progress, Info :: reliable_work:status()}
     | {failed, Info :: reliable_work:status()}
     | {error, not_found | timeout | badref | any()}.
 
-status(StoreRef, WorkRef, Timeout) when is_atom(StoreRef) ->
+status(Name, WorkRef, Timeout) when is_atom(Name) ->
     WorkId = reliable_work_ref:work_id(WorkRef),
-    safe_call(StoreRef, {status, WorkId}, Timeout).
+    safe_call(Name, {status, WorkId}, Timeout).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec enqueue(Name :: atom(), Work :: reliable_work:t()) ->
+    {ok, reliable_work_ref:t()} | {error, timeout | any()}.
+
+enqueue(Name, Work) ->
+    enqueue(Name, Work, undefined, ?DEFAULT_TIMEOUT).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec enqueue(Name :: atom(), Work :: reliable_work:t(), Opts :: opts()) ->
+    {ok, reliable_work_ref:t()} | {error, timeout | any()}.
+
+enqueue(Name, Work, Opts) ->
+    enqueue(Name, Work, Opts, ?DEFAULT_TIMEOUT).
 
 
 %% -----------------------------------------------------------------------------
@@ -136,17 +169,17 @@ status(StoreRef, WorkRef, Timeout) when is_atom(StoreRef) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec enqueue(
-    StoreRef :: atom(),
+    Name :: atom(),
     Work :: reliable_work:t(),
-    Opts :: reliable:enqueue_opts(),
+    Opts :: opts(),
     Timeout :: timeout()) ->
     {ok, reliable_work_ref:t()} | {error, timeout | any()}.
 
-enqueue(StoreRef, Work, Opts, Timeout)
-when is_atom(StoreRef) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
+enqueue(Name, Work, Opts, Timeout)
+when is_atom(Name) andalso ?IS_TIMEOUT(Timeout) ->
     case reliable_work:is_type(Work) of
         true ->
-            safe_call(StoreRef, {enqueue, StoreRef, Work, Opts}, Timeout);
+            safe_call(Name, {enqueue, Name, Work, Opts}, Timeout);
         false ->
             {error, {badarg, Work}}
     end.
@@ -159,11 +192,21 @@ when is_atom(StoreRef) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
 -spec flush_all() -> ok | {error, Reason :: timeout | any()}.
 
 flush_all() ->
+    flush_all(undefined).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec flush_all(opts()) -> ok | {error, Reason :: timeout | any()}.
+
+flush_all(Opts) ->
     Stores = supervisor:which_children(reliable_partition_store_sup),
     _ = [
         begin
-            %% eqwalizer:ignore StoreRef
-            case flush(StoreRef) of
+            %% eqwalizer:ignore Name
+            case flush(Name, Opts) of
                 ok ->
                     ok;
                 {error, Reason} ->
@@ -171,11 +214,11 @@ flush_all() ->
                         message =>
                             "Error while flushing reliable partition store",
                         reason => Reason,
-                        ref => StoreRef
+                        ref => Name
                     }),
                     ok
             end
-        end || {StoreRef, _, _, _} <- Stores
+        end || {Name, _, _, _} <- Stores
     ],
     ok.
 
@@ -184,81 +227,114 @@ flush_all() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec flush(StoreRef :: atom()) -> ok | {error, Reason :: any()}.
-
-flush(StoreRef) ->
-    flush(StoreRef, #{timeout => 5000}).
-
-
-%% -----------------------------------------------------------------------------
-%% @doc
-%% @end
-%% -----------------------------------------------------------------------------
--spec flush(StoreRef :: atom(), Opts :: riak_pool:exec_opts()) ->
+-spec flush(Name :: atom()) ->
     ok | {error, Reason :: timeout | any()}.
 
-flush(StoreRef, Opts) ->
-    safe_call(StoreRef, flush, Opts).
+flush(Name) ->
+    flush(Name, undefined).
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec flush(Name :: atom(), Opts :: opts()) ->
+    ok | {error, Reason :: timeout | any()}.
+
+flush(Name, Opts) ->
+    flush(Name, Opts, ?DEFAULT_TIMEOUT).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec list(StoreRef :: atom(), Opts :: list_opts()) ->
+-spec flush(Name :: atom(), Opts :: opts(), timeout()) ->
+    ok | {error, Reason :: timeout | any()}.
+
+flush(Name, Opts, Timeout) ->
+    safe_call(Name, {flush, Opts}, Timeout).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec list(Name :: atom()) ->
     {ok, {[reliable_work:t()], Continuation :: any()}}
     | {error, Reason :: any()}.
 
-list(StoreRef, Opts) ->
-    list(StoreRef, Opts, ?DEFAULT_TIMEOUT).
+list(Name) ->
+    list(Name, undefined).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec list(StoreRef :: atom(), Opts :: list_opts(), Timeout :: timeout()) ->
+-spec list(Name :: atom(), Opts :: list_opts()) ->
     {ok, {[reliable_work:t()], Continuation :: any()}}
     | {error, Reason :: any()}.
 
-list(StoreRef, Opts, Timeout) when is_map(Opts), ?IS_TIMEOUT(Timeout) ->
-    safe_call(StoreRef, {list, Opts}, Timeout).
+list(Name, Opts) ->
+    list(Name, Opts, ?DEFAULT_TIMEOUT).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec count(StoreRef :: atom()) ->
+-spec list(Name :: atom(), Opts :: list_opts(), Timeout :: timeout()) ->
+    {ok, {[reliable_work:t()], Continuation :: any()}}
+    | {error, Reason :: any()}.
+
+list(Name, Opts, Timeout) ->
+    safe_call(Name, {list, Opts}, Timeout).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec count(Name :: atom()) ->
     {ok, Count :: integer()} | {error, Reason :: any()}.
 
-count(StoreRef) ->
-    count(StoreRef, ?DEFAULT_TIMEOUT).
+count(Name) ->
+    count(Name, undefined).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec count(StoreRef :: atom(), Timeout :: timeout()) ->
+-spec count(Name :: atom(), opts()) ->
     {ok, Count :: integer()} | {error, Reason :: any()}.
 
-count(StoreRef, Timeout) when is_integer(Timeout) ->
-    count(StoreRef, Timeout + 100);
+count(Name, Opts) ->
+    count(Name, Opts, ?DEFAULT_TIMEOUT).
 
-count(StoreRef, Timeout) when ?IS_TIMEOUT(Timeout) ->
-    safe_call(StoreRef, {count, Timeout}, Timeout).
+
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec update(StoreRef :: atom(), Work :: reliable_work:t()) ->
+-spec count(Name :: atom(), Opts :: opts(), Timeout :: timeout()) ->
+    {ok, Count :: integer()} | {error, Reason :: any()}.
+
+count(Name, Opts, Timeout) ->
+    safe_call(Name, {count, Opts}, Timeout).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec update(Name :: atom(), Work :: reliable_work:t()) ->
     ok | {error, Reason :: any()}.
 
-update(StoreRef, Work) ->
-    update(StoreRef, Work, ?DEFAULT_TIMEOUT).
+update(Name, Work) ->
+    update(Name, Work, undefined).
 
 
 %% -----------------------------------------------------------------------------
@@ -266,13 +342,27 @@ update(StoreRef, Work) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec update(
-    StoreRef :: atom(), Work :: reliable_work:t(), Timeout :: timeout()) ->
+    Name :: atom(), Work :: reliable_work:t(), Opts :: any()) ->
     ok | {error, Reason :: timeout | any()}.
 
-update(StoreRef, Work, Timeout) ->
+update(Name, Work, Opts) ->
+    update(Name, Work, Opts, ?DEFAULT_TIMEOUT).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec update(
+    Name :: atom(),
+    Work :: reliable_work:t(),
+    Opts :: any(),
+    Timeout :: timeout()) -> ok | {error, Reason :: timeout | any()}.
+
+update(Name, Work, Opts, Timeout) ->
     case reliable_work:is_type(Work) of
         true ->
-            safe_call(StoreRef, {update, Work}, Timeout);
+            safe_call(Name, {update, Work, Opts}, Timeout);
         false ->
             error({badarg, Work})
     end.
@@ -282,11 +372,11 @@ update(StoreRef, Work, Timeout) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec delete(StoreRef :: atom(), WorkId :: reliable_work:id()) ->
+-spec delete(Name :: atom(), Term :: reliable_work:id() | reliable_work:t()) ->
     ok | {error, Reason :: timeout | any()}.
 
-delete(StoreRef, WorkId) ->
-    delete(StoreRef, WorkId, ?DEFAULT_TIMEOUT).
+delete(Name, Term) ->
+    delete(Name, Term, undefined).
 
 
 %% -----------------------------------------------------------------------------
@@ -294,22 +384,76 @@ delete(StoreRef, WorkId) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec delete(
-    StoreRef :: atom(), WorkId :: reliable_work:id(), Timeout :: timeout()) ->
-    ok | {error, Reason :: timeout | any()}.
+    Name :: atom(),
+    Term :: reliable_work:id() | reliable_work:t(),
+    Opts :: opts()) -> ok | {error, Reason :: timeout | any()}.
 
-delete(StoreRef, WorkId, Timeout) ->
-    delete_all(StoreRef, [WorkId], Timeout).
+delete(Name, Term, Opts) ->
+    delete(Name, Term, Opts, ?DEFAULT_TIMEOUT).
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec delete_all(StoreRef :: atom(), WorkIds :: [reliable_work:id()]) ->
+-spec delete(
+    Name :: atom(),
+    Term :: reliable_work:id() | reliable_work:t(),
+    Opts :: opts(),
+    Timeout :: timeout()) -> ok | {error, Reason :: timeout | any()}.
+
+delete(Name, Term, Opts, Timeout) ->
+    WorkId =
+        case reliable_work:is_type(Term) of
+            true ->
+                %% eqwalizer:ignore
+                reliable_work:id(Term);
+            false ->
+                Term
+        end,
+    %% eqwalizer:ignore
+    delete_all(Name, [WorkId], Opts, Timeout).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec move_to_dlq(Name :: atom(), Work :: reliable_work:t(), Opts :: opts()) ->
+    ok | {error, Reason :: any()}.
+
+move_to_dlq(Name, Work, Opts) ->
+    move_to_dlq(Name, Work, Opts, ?DEFAULT_TIMEOUT).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec move_to_dlq(
+    Name :: atom(),
+    Work :: reliable_work:t(),
+    Opts :: opts(),
+    Timeout :: timeout()) -> ok | {error, Reason :: timeout | any()}.
+
+move_to_dlq(Name, Work, Opts, Timeout) ->
+    case reliable_work:is_type(Work) of
+        true ->
+            safe_call(Name, {move_to_dlq, Name, Work, Opts}, Timeout);
+        false ->
+            error({badarg, Work})
+    end.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec delete_all(Name :: atom(), WorkIds :: [reliable_work:id()]) ->
     ok | {error, Reason :: timeout | any()}.
 
-delete_all(StoreRef, WorkIds) ->
-    delete_all(StoreRef, WorkIds, ?DEFAULT_TIMEOUT).
+delete_all(Name, WorkIds) ->
+    delete_all(Name, WorkIds, ?DEFAULT_TIMEOUT).
 
 
 %% -----------------------------------------------------------------------------
@@ -317,12 +461,26 @@ delete_all(StoreRef, WorkIds) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec delete_all(
-    StoreRef :: atom(),
+    Name :: atom(),
     WorkIds :: [reliable_work:id()],
     Timeout :: timeout()) -> ok | {error, Reason :: timeout | any()}.
 
-delete_all(StoreRef, WorkIds, Timeout) when is_list(WorkIds)->
-    safe_call(StoreRef, {delete, WorkIds}, Timeout).
+delete_all(Name, WorkIds, Opts) when is_list(WorkIds)->
+    delete_all(Name, WorkIds, Opts, ?DEFAULT_TIMEOUT).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec delete_all(
+    Name :: atom(),
+    WorkIds :: [reliable_work:id()],
+    Opts :: opts(),
+    Timeout :: timeout()) -> ok | {error, Reason :: timeout | any()}.
+
+delete_all(Name, WorkIds, Opts, Timeout) when is_list(WorkIds)->
+    safe_call(Name, {delete, WorkIds, Opts}, Timeout).
 
 
 
@@ -341,21 +499,39 @@ init([Bucket]) ->
         {ok, Ref} ->
             State = #state{
                 bucket = Bucket,
+                dlq_bucket = <<Bucket/binary, "_dlq">>,
                 backend = BackendMod,
                 backend_ref = Ref
             },
-            {ok, State};
+            {ok, State, {continue, setup_queue}};
 
         {error, Reason} ->
             {stop, {error, Reason}}
     end.
 
 
-handle_call({enqueue, StoreRef, Work, Opts}, From, #state{} = State) ->
+handle_continue(setup_queue, State0) ->
+    State =
+        case reliable_config:get(local_queue, undefined) of
+            undefined ->
+                State0;
+
+            #{enabled := false} ->
+                State0;
+
+            #{enabled := true} = Opts ->
+                Q = reliable_queue:new(State0#state.bucket, Opts),
+                State0#state{queue = Q}
+        end,
+
+    {noreply, State}.
+
+
+handle_call({enqueue, Name, Work, Opts}, From, #state{} = State) ->
     BackendMod = State#state.backend,
-    Ref = State#state.backend_ref,
+    BackendRef = State#state.backend_ref,
     Bucket = State#state.bucket,
-    case do_enqueue(StoreRef, BackendMod, Ref, Bucket, Work, Opts) of
+    case do_enqueue(Name, BackendMod, BackendRef, Bucket, Work, Opts) of
         {ok, WorkRef} ->
             _ = gen_server:reply(From, {ok, WorkRef}),
             Payload = reliable_work:event_payload(Work),
@@ -379,7 +555,7 @@ handle_call({status, WorkId}, _From, State) ->
     Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
 
-    Result = case BackendMod:get(Ref, Bucket, WorkId) of
+    Result = case BackendMod:get(Ref, Bucket, WorkId, undefined) of
         {ok, Work} ->
             {in_progress, reliable_work:status(Work)};
 
@@ -389,11 +565,11 @@ handle_call({status, WorkId}, _From, State) ->
 
     {reply, Result, State};
 
-handle_call({count, Timeout}, _From, #state{} = State) ->
+handle_call({count, Opts}, _From, #state{} = State) ->
     BackendMod = State#state.backend,
     Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
-    Reply = BackendMod:count(Ref, Bucket, #{timeout => Timeout}),
+    Reply = BackendMod:count(Ref, Bucket, Opts),
     {reply, Reply, State};
 
 handle_call({list, Opts}, _From, #state{} = State) ->
@@ -403,25 +579,60 @@ handle_call({list, Opts}, _From, #state{} = State) ->
     Reply = BackendMod:list(Ref, Bucket, Opts),
     {reply, Reply, State};
 
-handle_call(flush, _From, #state{} = State) ->
+handle_call({flush, Opts}, _From, #state{} = State) ->
     BackendMod = State#state.backend,
     Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
-    Reply = BackendMod:flush(Ref, Bucket),
+    Reply = BackendMod:flush(Ref, Bucket, Opts),
     {reply, Reply, State};
 
-handle_call({update, Work}, _From, #state{} = State) ->
+handle_call({update, Work, Opts}, _From, #state{} = State) ->
     BackendMod = State#state.backend,
     Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
-    Reply = BackendMod:update(Ref, Bucket, Work),
+    Reply = BackendMod:update(Ref, Bucket, Work, Opts),
     {reply, Reply, State};
 
-handle_call({delete, WorkIds}, _From, #state{} = State) ->
+handle_call({delete, WorkIds, Opts}, _From, #state{} = State) ->
     BackendMod = State#state.backend,
     Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
-    Reply = BackendMod:delete_all(Ref, Bucket, WorkIds),
+    Reply = BackendMod:delete_all(Ref, Bucket, WorkIds, Opts),
+    {reply, Reply, State};
+
+handle_call({move_to_dlq, Name, Work, Opts}, From, #state{} = State) ->
+    BackendMod = State#state.backend,
+    BackendRef = State#state.backend_ref,
+    Bucket = State#state.bucket,
+
+    Reply =
+        case BackendMod:delete(Name, Bucket, Work) of
+            ok ->
+                DLQBucket = State#state.dlq_bucket,
+                Result = do_enqueue(
+                    Name, BackendMod, BackendRef, DLQBucket, Work, Opts
+                ),
+                case Result of
+                    {ok, WorkRef} ->
+                        _ = gen_server:reply(From, {ok, WorkRef}),
+                        Payload = reliable_work:event_payload(Work),
+                        Event = {
+                            reliable_event,
+                            #{
+                                status => moved_to_dlq,
+                                work_ref => WorkRef,
+                                payload => Payload
+                            }
+                        },
+                        ok = reliable_event_manager:notify(Event);
+
+                    {error, _} = Error ->
+                        Error
+                end;
+
+            {error, _} = Error ->
+                Error
+        end,
     {reply, Reply, State};
 
 handle_call(Msg, From, State) ->
@@ -462,33 +673,38 @@ code_change(_OldVsn, State, _Extra) ->
 %% =============================================================================
 
 
-safe_call(ServerRef, Request, Timeout) ->
+safe_call(ServerRef, Request, Timeout) when ?IS_TIMEOUT(Timeout) ->
     Ref = gen_server:send_request(ServerRef, Request),
 
     case gen_server:wait_response(Ref, Timeout) of
-        {reply, Response} -> Response;
-        timeout -> {error, timeout}
+        {reply, Response} ->
+            Response;
+        {error, {Reason, ServerRef}} ->
+            {error, Reason};
+        timeout ->
+            {error, timeout}
     end.
 
 
 %% @private
-do_enqueue(StoreRef, BackendMod, Ref, Bucket, Work, Opts) ->
+do_enqueue(Name, BackendMod, Ref, Bucket, Work, Opts) ->
     WorkId = reliable_work:id(Work),
     case BackendMod:enqueue(Ref, Bucket, Work, Opts) of
         ok ->
             ?LOG_INFO(#{
                 message => "Enqueued work",
                 work_id => WorkId,
-                store_ref => StoreRef,
+                store_ref => Name,
                 instance => Bucket
             }),
-            WorkRef = reliable_work:ref(StoreRef, Work),
+            WorkRef = reliable_work:ref(Name, Work),
             {ok, WorkRef};
+
         {error, _} = Error ->
             ?LOG_INFO(#{
                 message => "Enqueuing error",
                 work_id => WorkId,
-                store_ref => StoreRef,
+                store_ref => Name,
                 instance => Bucket
             }),
            Error

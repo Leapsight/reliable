@@ -28,6 +28,9 @@
     module                  ::  module(),
     function                ::  atom(),
     args                    ::  [term()],
+    status                  ::  completed | failed | undefined,
+    timestamp               ::  integer() | undefined,
+    retries = 0             ::  integer(),
     result                  ::  term() | undefined
 }).
 
@@ -47,6 +50,9 @@
 -export([node/1]).
 -export([result/1]).
 -export([set_result/2]).
+-export([set_status/2]).
+-export([status/1]).
+-export([from_term/1]).
 
 
 
@@ -75,8 +81,7 @@ andalso is_list(Args) ->
         node = Node,
         module = Module,
         function = Function,
-        args = Args,
-        result = undefined
+        args = Args
     }.
 
 
@@ -130,18 +135,17 @@ result(#reliable_task{result = Val}) -> Val.
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec has_result(Task :: t()) -> boolean
+-spec has_result(Task :: t()) -> boolean().
 
 has_result(#reliable_task{result = Val}) ->
     Val =/= undefined.
-
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec args(Task :: t()) -> term().
+-spec args(Task :: t()) -> list().
 
 args(#reliable_task{args = Val}) -> Val.
 
@@ -154,3 +158,65 @@ args(#reliable_task{args = Val}) -> Val.
 
 set_result(Result, #reliable_task{} = T) ->
     T#reliable_task{result = Result}.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec status(Task :: t()) -> completed | failed | undefined.
+
+status(#reliable_task{status = Val}) -> Val.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec set_status(completed | failed, Task :: t()) -> NewTask :: t().
+
+set_status(Status, #reliable_task{} = T)
+when Status == completed; Status == failed ->
+    T#reliable_task{status = Status}.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec from_term(any()) -> t() | no_return().
+
+from_term(#reliable_task{} = T) ->
+    %% Current version
+    T;
+
+from_term({reliable_task, N, M, F, A, R})
+when
+is_atom(N),
+is_atom(M),
+is_atom(F),
+is_list(A) ->
+    %% Version 1.0
+    Status = case R of
+        undefined ->
+            undefined;
+        {error, _} ->
+            failed;
+        _ ->
+            completed
+    end,
+
+    #reliable_task{
+        node = N,
+        module = M,
+        function = F,
+        args = A,
+        status = Status,
+        timestamp = erlang:system_time(millisecond),
+        result = R
+    };
+
+from_term(Term) ->
+    error({badarg, Term}).
+
+

@@ -20,7 +20,6 @@ init_per_suite(Config) ->
     application:set_env(riakc, allow_listing, true),
     application:ensure_all_started(reliable),
     logger:set_application_level(reliable, debug),
-    meck:unload(),
 
     %% meck:new(reliable, [passthrough]),
     %% We remove all work from the queues
@@ -29,7 +28,7 @@ init_per_suite(Config) ->
     Config.
 
 end_per_suite(Config) ->
-    %% meck:unload(),
+    meck:unload(),
     %% Terminate the application.
     application:stop(reliable),
     {save_config, Config}.

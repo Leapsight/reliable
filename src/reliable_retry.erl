@@ -26,8 +26,8 @@
 
 -record(reliable_retry, {
     id                  ::  any(),
-    deadline            ::  pos_integer(),
-    max_retries = 0     ::  non_neg_integer(),
+    deadline            ::  non_neg_integer(),
+    max_retries         ::  non_neg_integer(),
     interval            ::  pos_integer(),
     count = 0           ::  non_neg_integer(),
     backoff             ::  optional(backoff:backoff()),
@@ -35,16 +35,16 @@
 }).
 
 -type t()               ::  #reliable_retry{}.
--type opt()             ::  {deadline, pos_integer()}
-                            | {max_retries, pos_integer()}
+-type opt()             ::  {deadline, non_neg_integer()}
+                            | {max_retries, non_neg_integer()}
                             | {interval, pos_integer()}
                             | {backoff_enabled, boolean()}
                             | {backoff_min, pos_integer()}
                             | {backoff_max, pos_integer()}
                             | {backoff_type, jitter | normal}.
 -type opts_map()        ::  #{
-                                deadline => pos_integer(),
-                                max_retries => pos_integer(),
+                                deadline => non_neg_integer(),
+                                max_retries => non_neg_integer(),
                                 interval => pos_integer(),
                                 backoff_enabled => boolean(),
                                 backoff_min => pos_integer(),
@@ -66,6 +66,7 @@
 
 -compile({no_auto_import, [get/1]}).
 
+-eqwalizer({nowarn_function, init/2}).
 
 
 %% =============================================================================
@@ -82,6 +83,7 @@
 -spec init(Id :: any(), Opts :: opts()) -> t().
 
 init(Id, Opts) ->
+
     State0 = #reliable_retry{
         id = Id,
         max_retries = key_value:get(max_retries, Opts, 10),
@@ -107,10 +109,16 @@ init(Id, Opts) ->
 %% -----------------------------------------------------------------------------
 -spec get(State :: t()) -> integer() | deadline | max_retries.
 
+
 get(#reliable_retry{start_ts = undefined, backoff = undefined} = State) ->
     State#reliable_retry.interval;
 
-get(#reliable_retry{start_ts = undefined, backoff = B}) ->
+get(#reliable_retry{start_ts = undefined, backoff = B})
+when B =/= undefined ->
+    backoff:get(B);
+
+get(#reliable_retry{max_retries = 0, deadline = 0, backoff = B})
+when B =/= undefined ->
     backoff:get(B);
 
 get(#reliable_retry{count = N, max_retries = M}) when N > M ->
@@ -118,9 +126,17 @@ get(#reliable_retry{count = N, max_retries = M}) when N > M ->
 
 get(#reliable_retry{} = State) ->
     Now = erlang:system_time(millisecond),
-    Start = State#reliable_retry.start_ts,
     Deadline = State#reliable_retry.deadline,
     B = State#reliable_retry.backoff,
+
+    Start =
+        case State#reliable_retry.start_ts of
+            undefined ->
+                0;
+            Val ->
+                Val
+        end,
+
 
     case Deadline > 0 andalso Now > (Start + Deadline) of
         true ->
@@ -151,7 +167,7 @@ fail(#reliable_retry{backoff = undefined} = State0) ->
 
     {get(State), State};
 
-fail(#reliable_retry{backoff = B0} = State0) ->
+fail(#reliable_retry{backoff = B0} = State0) when B0 =/= undefined  ->
     {_, B1} = backoff:fail(B0),
 
     State1 = State0#reliable_retry{
@@ -174,26 +190,31 @@ succeed(#reliable_retry{backoff = undefined} = State0) ->
         count = 0,
         start_ts = undefined
     },
-    {get(State), State};
+    {State#reliable_retry.interval, State};
 
 succeed(#reliable_retry{backoff = B0} = State0) ->
-    {_, B1} = backoff:fail(B0),
+    {_, B1} = backoff:succeed(B0),
     State = State0#reliable_retry{
         count = 0,
         start_ts = undefined,
         backoff = B1
     },
-    {get(State), State}.
+    {State#reliable_retry.interval, State}.
 
 
 %% -----------------------------------------------------------------------------
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec fire(State :: t()) -> Ref :: timer:ref().
+-spec fire(State :: t()) -> Ref :: reference() | no_return().
 
 fire(#reliable_retry{} = State) ->
-    erlang:start_timer(get(State), self(), State#reliable_retry.id).
+    case get(State) of
+        Delay when is_integer(Delay) ->
+            erlang:start_timer(Delay, self(), State#reliable_retry.id);
+        Other ->
+            error(Other)
+    end.
 
 
 %% -----------------------------------------------------------------------------

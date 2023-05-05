@@ -21,7 +21,6 @@
 -behaviour(reliable_store_backend).
 
 -include_lib("kernel/include/logger.hrl").
--include_lib("riakc/include/riakc.hrl").
 -include("reliable.hrl").
 
 -author("Christopher S. Meiklejohn <christopher.meiklejohn@gmail.com>").
@@ -30,17 +29,17 @@
 -define(TABLE, reliable_dets).
 -define(FILENAME, "reliable_dets_data").
 
+-type continuation()     :: map() | '$end_of_table'.
+
 -export([count/3]).
--export([delete/3]).
--export([delete_all/3]).
--export([enqueue/3]).
+-export([delete/4]).
+-export([delete_all/4]).
 -export([enqueue/4]).
--export([flush/2]).
+-export([flush/3]).
 -export([fold/5]).
--export([get/3]).
+-export([get/4]).
 -export([init/0]).
 -export([list/3]).
--export([update/3]).
 -export([update/4]).
 
 
@@ -77,22 +76,8 @@ init() ->
 -spec enqueue(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
-    Work :: reliable_work:t()) ->
-    ok | {error, Reason :: reliable_store_backend:error_reason()}.
-
-enqueue(Ref, Bucket, Work) ->
-    enqueue(Ref, Bucket, Work, #{}).
-
-
-%% -----------------------------------------------------------------------------
-%% @doc
-%% @end
-%% -----------------------------------------------------------------------------
--spec enqueue(
-    Ref :: reliable_store_backend:ref(),
-    Bucket :: binary(),
     Work :: reliable_work:t(),
-    Opts :: map()) ->
+    Opts :: undefined) ->
     ok | {error, Reason :: reliable_store_backend:error_reason()}.
 
 enqueue(Ref, _Bucket, Work, _Opts) ->
@@ -111,13 +96,25 @@ enqueue(Ref, _Bucket, Work, _Opts) ->
 -spec get(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
-    WorkId :: reliable_work:id()) ->
+    WorkId :: reliable_work:id(),
+    Opts :: undefined) ->
     {ok, term()} | {error, not_found | any()}.
 
-get(Ref, _Bucket, WorkId) ->
+get(Ref, _Bucket, WorkId, _) ->
     case dets:lookup(Ref, WorkId) of
-        L when is_list(L) ->
-            {ok, L};
+        [Work] ->
+            {ok, Work};
+
+        [Work|_] ->
+            ?LOG_WARNING(#{
+                description => "Found duplicates",
+                work_id => WorkId
+            }),
+            {ok, Work};
+
+        [] ->
+            {error, not_found};
+
         {error, _} = Error ->
             Error
     end.
@@ -130,15 +127,11 @@ get(Ref, _Bucket, WorkId) ->
 -spec delete(
     Ref :: reliable_store_backend:ref() | atom(),
     Bucket :: binary(),
-    WorkId :: reliable_work:id()) -> ok | {error, Reason :: any()}.
+    WorkId :: reliable_work:id(),
+    Opts :: optional(map())) -> ok | {error, Reason :: any()}.
 
-delete(Ref, _Bucket, WorkId) ->
-    case dets:delete(Ref, WorkId) of
-        true ->
-            ok;
-        {error, Reason} ->
-            {error, Reason}
-    end.
+delete(Ref, _Bucket, WorkId, _) ->
+    dets:delete(Ref, WorkId).
 
 
 %% -----------------------------------------------------------------------------
@@ -148,24 +141,12 @@ delete(Ref, _Bucket, WorkId) ->
 -spec delete_all(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
-    AllCompleted :: [reliable_work:id()]) -> ok | {error, Reason :: any()}.
+    AllCompleted :: [reliable_work:id()],
+    Opts :: optional(map())) -> ok | {error, Reason :: any()}.
 
-delete_all(Ref, _Bucket, WorkIds) ->
+delete_all(Ref, _Bucket, WorkIds, _) ->
     lists:foreach(fun(Key) -> dets:delete(Ref, Key) end, WorkIds),
     ok.
-
-
-%% -----------------------------------------------------------------------------
-%% @doc
-%% @end
-%% -----------------------------------------------------------------------------
--spec update(
-    Ref :: reliable_store_backend:ref(),
-    Bucket :: binary(),
-    Work :: reliable_work:t()) -> ok | {error, any()}.
-
-update(Ref, Bucket, Work) ->
-    update(Ref, Bucket, Work, #{}).
 
 
 %% -----------------------------------------------------------------------------
@@ -189,7 +170,7 @@ update(Ref, _Bucket, Work, _Opts) ->
 -spec count(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
-    Opts :: map()) -> {ok, Count :: integer()} | {error, Reason :: any()}.
+    Opts :: optional(map())) -> {ok, Count :: integer()} | {error, Reason :: any()}.
 
 count(Ref, _Bucket, _Opts) ->
     case dets:info(Ref) of
@@ -208,9 +189,12 @@ count(Ref, _Bucket, _Opts) ->
 -spec list(
     Ref :: reliable_store_backend:ref(),
     Bucket :: binary(),
-    Opts :: map()) ->
+    Opts :: optional(map())) ->
     {ok, {[reliable_work:t()], Continuation :: continuation()}}
     | {error, Reason :: any()}.
+
+list(Ref, Bucket, undefined) ->
+    list(Ref, Bucket, #{});
 
 list(Ref, Bucket, Opts) ->
     Fun = fun({_K, V}, Acc) -> [V | Acc] end,
@@ -219,21 +203,10 @@ list(Ref, Bucket, Opts) ->
         {ok, {L, Cont}} when is_list(L) ->
             %% eqwalizer:ignore L
             {ok, {lists:reverse(L), Cont}};
+
         {error, _} = Error ->
             Error
     end.
-
-
-
-%% -----------------------------------------------------------------------------
-%% @doc
-%% @end
-%% -----------------------------------------------------------------------------
--spec flush(Ref :: reliable_store_backend:ref(), Bucket :: binary()) ->
-    ok | {error, Reason :: any()}.
-
-flush(Ref, Bucket) ->
-    flush(Ref, Bucket, #{}).
 
 
 %% -----------------------------------------------------------------------------
@@ -245,13 +218,63 @@ flush(Ref, Bucket) ->
     Bucket :: binary(),
     Fun :: function(),
     Acc :: any(),
-    Opts :: map()) ->
+    Opts :: optional(map())) ->
     {ok, {NewAcc :: any(), Continuation :: continuation()}}
     | {error, Reason :: any()}.
 
-fold(Ref, _Bucket, Function, Acc, Opts) ->
-    #{max_results := Limit} = fold_opts(Opts),
-    fold(Ref, Function, Acc, 0, Limit, dets:first(Ref)).
+fold(Ref, _Bucket, Function, Acc, undefined) ->
+    fold(Ref, _Bucket, Function, Acc, #{});
+
+fold(Ref, _Bucket, Function, Acc0, Opts) ->
+    {max_results, Limit} = lists:keyfind(max_results, 1, fold_opts(Opts)),
+
+    case Limit of
+        Limit when is_integer(Limit) ->
+            fold(Ref, Function, Acc0, 0, Limit, dets:first(Ref));
+
+        infinity ->
+            case dets:foldl(Function, Acc0, Ref) of
+                {error, _} = Error ->
+                    Error;
+                Acc ->
+                    {ok, {Acc, '$end_of_table'}}
+            end
+    end.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec flush(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    Opts :: optional(map())) -> ok | {error, any()}.
+
+flush(Ref, Bucket, undefined) ->
+    flush(Ref, Bucket, #{});
+
+flush(Ref, Bucket, Opts) when is_map(Opts) ->
+    Fun = fun({K, _}, Acc) ->
+        case delete(Ref, Bucket, K, undefined) of
+            ok ->
+                Acc;
+            {error, not_found} ->
+                Acc;
+            {error, Reason} ->
+                throw(Reason)
+        end
+    end,
+
+    try fold(Ref, Bucket, Fun, ok, Opts) of
+        {ok, {_, '$end_of_table'}} ->
+            ok;
+        {ok, {_, Cont}} ->
+            flush(Ref, Bucket, Opts#{continuation => Cont})
+    catch
+        throw:Reason ->
+            {error, Reason}
+    end.
 
 
 
@@ -261,6 +284,11 @@ fold(Ref, _Bucket, Function, Acc, Opts) ->
 
 
 %% @private
+-spec fold_opts(optional(map())) -> list().
+
+fold_opts(undefined) ->
+    fold_opts(#{});
+
 fold_opts(Opts0) ->
     Default = #{
         max_results => 10,
@@ -278,49 +306,30 @@ fold_opts(Opts0) ->
     end.
 
 
+%% @private
 fold(_, _, Acc, _, _, '$end_of_table') ->
-    {ok, {lists:reverse(Acc), '$end_of_table'}};
+    {ok, {Acc, '$end_of_table'}};
 
-fold(Ref, Function, Acc, Cnt, Limit, Obj)
+fold(Ref, Function, Acc, Cnt, Limit, Key)
 when is_integer(Limit), Cnt == Limit ->
     Continuation = #{
         ref => Ref,
         function => Function,
         limit => Limit,
-        next => Obj
+        next => Key
     },
-    {ok, {lists:reverse(Acc), Continuation}};
+    {ok, {Acc, Continuation}};
 
-fold(Ref, Function, Acc, Cnt, Limit, Obj)
-when is_integer(Limit); Limit == infinity ->
-    fold(Ref, Function, [Obj|Acc], Cnt + 1, Limit, dets:next(Ref, Obj)).
+fold(Ref, Function, Acc0, Cnt, Limit, Key) ->
+    Acc =
+        case dets:lookup(Ref, Key) of
+            [Work|_] ->
+                Function({Key, Work}, Acc0);
+            _ ->
+                Acc0
+        end,
+    fold(Ref, Function, Acc, Cnt + 1, Limit, dets:next(Ref, Key)).
 
 
-%% @private
--spec flush(
-    Ref :: reliable_store_backend:ref(),
-    Bucket :: binary(),
-    Opts :: map()) -> ok | {error, any()}.
 
-flush(Ref, Bucket, Opts) ->
-    Fun = fun({K, _}, Acc) ->
-        case delete(Ref, Bucket, K) of
-            ok ->
-                Acc;
-            {error, not_found} ->
-                Acc;
-            {error, Reason} ->
-                throw(Reason)
-        end
-    end,
-
-    try fold(Ref, Bucket, Fun, ok, Opts) of
-        {ok, {ok, undefined}} ->
-            ok;
-        {ok, {ok, Cont}} ->
-            flush(Ref, Bucket, Opts#{continuation => Cont})
-    catch
-        throw:Reason ->
-            {error, Reason}
-    end.
 

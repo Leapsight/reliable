@@ -270,15 +270,15 @@ do_partition(Hash) when is_integer(Hash) ->
 %% If instances are ["foo-0", "foo-1"] and N is 3 this will generate
 %% ```
 %% #{
-%%  "foo-0" => [
-%%         "foo-0_partition_1",
-%%         "foo-0_partition_2",
-%%         "foo-0_partition_3"
+%%  <<"foo-0">> => [
+%%         <<"foo-0_partition_1">>,
+%%         <<"foo-0_partition_2">>,
+%%         <<"foo-0_partition_3">>
 %%    ]
-%%  "foo-1" => [
-%%         "foo-1_partition_1",
-%%         "foo-1_partition_2",
-%%         "foo-1_partition_3"
+%%  <<"foo-1" => [
+%%         <<"foo-1_partition_1">>,
+%%         <<"foo-1_partition_2">>,
+%%         <<"foo-1_partition_3">>
 %%    ]
 %% }.
 %% '''
