@@ -52,7 +52,7 @@
     Ref :: ref(),
     Bucket :: binary(),
     Work :: reliable_work:t(),
-    Opts :: riak_pool:exec_opts()) ->
+    Opts :: any()) ->
     ok | {error, Reason :: error_reason()}.
 
 
@@ -85,21 +85,21 @@
     Ref :: ref(),
     Bucket :: binary(),
     Work :: reliable_work:t(),
-    Opts :: riak_pool:exec_opts()) -> ok | {error, Reason :: error_reason()}.
+    Opts :: any()) -> ok | {error, Reason :: error_reason()}.
 
 
 -callback count(
     Ref :: ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: integer() | {error, Reason :: any()}.
+    {ok, Count :: integer()} | {error, Reason :: any()}.
 
 
 -callback list(
     Ref :: ref(),
     Bucket :: binary(),
     Opts :: map()) ->
-    List :: {[reliable_work:t()], Continuation :: any()}
+    {ok, {[reliable_work:t()], Continuation :: any()}}
     | {error, Reason :: any()}.
 
 
@@ -113,5 +113,5 @@
     Fun :: function(),
     Acc :: any(),
     Opts :: map()) ->
-    {NewAcc :: any(), Continuation :: any()} | {error, Reason :: any()}.
+    {ok, {NewAcc :: any(), Continuation :: any()}} | {error, Reason :: any()}.
 

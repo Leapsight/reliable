@@ -22,9 +22,8 @@
 %% ensuring a sequence of Riak KV operations are guaranteed to occur, and to
 %% occur in order.
 %% The problem arises when one wants to write multiple associated objects to
-%% Riak KV which does not support multi-key atomicity, including but not
-%% exclusively, the update of application-managed secondary indices after a
-%% write.
+%% Riak KV which does not support multi-key atomicity e.g. update of
+%% application-managed secondary indices after a write.
 %% @end
 %% -----------------------------------------------------------------------------
 -module(reliable).
@@ -45,7 +44,7 @@
                                 partition_key => binary(),
                                 event_payload => any(),
                                 subscribe => boolean(),
-                                %% riak_pool:opts()
+                                %% riak_pool:exec_opts()
                                 deadline => pos_integer(),
                                 timeout => pos_integer(),
                                 max_retries => non_neg_integer(),
@@ -68,8 +67,8 @@
                             }.
 -type wf_item_id()      ::  term().
 
--type wf_action()       ::  reliable_task:new()
-                            | fun(() -> reliable_task:new()).
+-type wf_action()       ::  reliable_task:t()
+                            | fun(() -> reliable_task:t()).
 -type wf_fun()          ::  fun(() -> wf_fun_result()).
 -type wf_fun_result()   ::  any().
 -type wf_result()       ::  #{
@@ -118,10 +117,10 @@
 %% -----------------------------------------------------------------------------
 %% @doc
 %% > Notice subscriptions are not working at the moment.
-%% > See {@link yield/1,2} to track progress.
+%% > See {@link yield/2} to track progress.
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(Tasks :: [reliable_task:new()]) ->
+-spec enqueue(Tasks :: [{pos_integer(), reliable_task:t()}]) ->
     {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
 
 enqueue(Tasks) ->
@@ -131,10 +130,10 @@ enqueue(Tasks) ->
 %% -----------------------------------------------------------------------------
 %% @doc
 %% > Notice subscriptions are not working at the moment
-%% > See {@link yield/1,2} to track progress.
+%% > See {@link yield/2} to track progress.
 %% @end
 %% -----------------------------------------------------------------------------
--spec enqueue(Tasks :: [reliable_task:new()], Opts :: enqueue_opts()) ->
+-spec enqueue(Tasks :: [{pos_integer(), reliable_task:t()}], Opts :: enqueue_opts()) ->
     {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
 
 enqueue(Tasks, Opts) ->
@@ -144,11 +143,11 @@ enqueue(Tasks, Opts) ->
 %% -----------------------------------------------------------------------------
 %% @doc
 %% > Notice subscriptions are not working at the moment
-%% > See {@link yield/1,2} to track progress.
+%% > See {@link yield/2} to track progress.
 %% @end
 %% -----------------------------------------------------------------------------
 -spec enqueue(
-    Tasks :: [reliable_task:new()],
+    Tasks :: [{pos_integer(), reliable_task:t()}],
     Opts :: enqueue_opts(),
     Timeout :: timeout()) ->
     {ok, WorkRef :: reliable_work_ref:t()} | {error, term()}.
@@ -192,11 +191,11 @@ when is_list(Tasks) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
 %% > This will be replaced by a pubsub version soon.
 %% @end
 %% -----------------------------------------------------------------------------
--spec yield(WorkRef :: reliable_worker:work_ref()) ->
-    {ok, Payload :: any()} | timeout.
+-spec yield(WorkRef :: reliable_work_ref:t()) ->
+    {ok, Payload :: any()} | {error, any()} | timeout.
 
 yield(WorkRef) ->
-    yield(WorkRef, infinity).
+    yield(WorkRef, 15000).
 
 
 %% -----------------------------------------------------------------------------
@@ -212,13 +211,10 @@ yield(WorkRef) ->
 %% > This will be replaced by a pubsub version soon.
 %% @end
 %% -----------------------------------------------------------------------------
--spec yield(WorkRef :: reliable_worker:work_ref(), Timeout :: timeout()) ->
-    {ok, Payload :: any()} | timeout.
+-spec yield(WorkRef :: reliable_work_ref:t(), Timeout :: pos_integer()) ->
+    {ok, Payload :: any()} | {error, any()} | timeout.
 
-yield(_, Timeout) when Timeout =< 0 ->
-    timeout;
-
-yield(WorkRef, Timeout) when ?IS_TIMEOUT(Timeout) ->
+yield(WorkRef, Timeout) when is_integer(Timeout), Timeout > 0 ->
     yield(WorkRef, Timeout, undefined).
 
 
@@ -244,7 +240,7 @@ status(WorkerRef) ->
     WorkRef :: reliable_work_ref:t() | binary(), Timeout :: timeout()) ->
     {in_progress, Status :: reliable_work:status()}
     | {failed, Status :: reliable_work:status()}
-    | {error, not_found | badref | any()}.
+    | {error, not_found | timeout | badref | any()}.
 
 status(WorkerRef, Timeout) ->
     reliable_partition_store:status(WorkerRef, Timeout).
@@ -324,6 +320,12 @@ workflow_id() ->
 %% Termination of a Babel workflow means that an exception is thrown to an
 %% enclosing catch. Thus, the expression `catch babel:abort(foo)' does not
 %% terminate the workflow.
+%%
+%% Example:
+%% ```
+%% reliable:workflow(fun()
+%% )
+%% '''
 %% @end
 %% -----------------------------------------------------------------------------
 -spec abort(Reason :: any()) -> no_return().
@@ -338,7 +340,7 @@ abort(Reason) ->
 %% the `Opts' argument.
 %%
 %% > Notice subscriptions are not working at the moment
-%% > See {@link yield/1,2} to track progress.
+%% > See {@link yield/2} to track progress.
 %%
 %% @end
 %% -----------------------------------------------------------------------------
@@ -412,7 +414,7 @@ workflow(Fun) ->
 %% enclosing parent workflow is aborted, the entire nested workflow is aborted.
 %%
 %% > Notice subscriptions are not working at the moment
-%% > See {@link yield/1,2} to track progress.
+%% > See {@link yield/2} to track progress.
 %%
 %% @end
 %% -----------------------------------------------------------------------------
@@ -492,6 +494,7 @@ get_workflow_item(Id) ->
     ok = ensure_in_workflow(),
     case reliable_digraph:vertex(get(?WORKFLOW_GRAPH), Id) of
         {Id, _} = Item ->
+            %% eqwalizer:ignore
             Item;
         false ->
             error(badkey)
@@ -511,6 +514,7 @@ find_workflow_item(Id) ->
     ok = ensure_in_workflow(),
     case reliable_digraph:vertex(get(?WORKFLOW_GRAPH), Id) of
         {Id, _} = Item ->
+            %% eqwalizer:ignore
             {ok, Item};
         false ->
             error
@@ -688,6 +692,7 @@ enqueue_workflow(Opts) ->
                 work_id => get(?WORKFLOW_ID),
                 event_payload => get_workflow_event_payload()
             },
+            %% eqwalizer:ignore NewOpts
             case enqueue(Tasks, NewOpts) of
                 {ok, WorkRef} ->
                     {top, true, WorkRef};
@@ -825,11 +830,6 @@ get_work_id(_) ->
     ksuid:gen_id(millisecond).
 
 
-
-%% @private
-
-
-
 %% @private
 maybe_subscribe(_WorkRef, _Opts) ->
     %% This process can only subscribe to one event, otherwise we get an
@@ -848,10 +848,14 @@ unsubscribe(_WorkRef) ->
     WorkRef :: reliable_work_ref:t(),
     Timeout :: integer(),
     Status :: undefined | reliable_work:status()) ->
-    {ok, Payload :: any()} | {error, not_found}.
+    {ok, Payload :: any()} | {error, any()} | timeout.
+
+
+yield(_, 0, _) ->
+    timeout;
 
 yield(WorkRef, Timeout, Status0) ->
-    SleepTime = 2000,
+    SleepTime = 1000,
     T0 = erlang:system_time(millisecond),
 
     case status(WorkRef) of
@@ -859,16 +863,20 @@ yield(WorkRef, Timeout, Status0) ->
             ok = yield_sleep(SleepTime, Timeout),
             T1 = erlang:system_time(millisecond),
             yield(WorkRef, Timeout - (T1 - T0), Status1);
+
         {failed, Status1} ->
             {ok, maps:get(event_payload, Status1)};
+
         {error, not_found} = Error when Status0 == undefined ->
             Error;
+
         {error, not_found} ->
             %% At the moment a completed or failed Work is removed
             %% so the absence is regarded as completion
             %% TODO this will change in the future as we will retain work
             %% objects
             {ok, maps:get(event_payload, Status0)};
+
         {error, Reason} ->
             error(Reason)
     end.

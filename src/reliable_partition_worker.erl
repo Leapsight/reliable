@@ -61,6 +61,8 @@
 -export([terminate/2]).
 -export([code_change/3]).
 
+-eqwalizer({nowarn_function, maybe_update/3}).
+
 
 
 %% =============================================================================
@@ -70,7 +72,7 @@
 
 -spec start_link(
     WorkerName :: atom(), StoreRef :: atom(), Bucket :: binary()) ->
-    {ok, pid()} | {error, any()}.
+    {ok, pid()} | ignore | {error, any()}.
 
 start_link(WorkerName, StoreRef, Bucket) ->
     gen_server:start_link({local, WorkerName}, ?MODULE, [StoreRef, Bucket], []).
@@ -85,18 +87,27 @@ start_link(WorkerName, StoreRef, Bucket) ->
 
 init([StoreRef, Bucket]) ->
     ?LOG_DEBUG("Initializing partition store; partition=~p", [Bucket]),
+    Continue = {get_riak_connection, [StoreRef, Bucket]},
 
-    Conn = get_db_connection(),
+    ok = logger:update_process_metadata(#{partition => Bucket}),
+
+    {ok, undefined, {continue, Continue}}.
+
+
+handle_continue({get_riak_connection, [StoreRef, Bucket]}, undefined) ->
+    %% This the connection we will use to process the work
+    Conn = get_riak_connection(),
+
     %% Initialize symbolic variable dict.
     Symbolics = dict:store(riakc, Conn, dict:new()),
+
     State0 = #state{
         store_ref = StoreRef,
         bucket = Bucket,
         symbolics = Symbolics
     },
     State1 = reset_work_state(State0),
-    {ok, State1, {continue, schedule_work}}.
-
+    {noreply, State1, {continue, schedule_work}};
 
 handle_continue(schedule_work, State0) ->
     State1 = schedule_work(State0),
@@ -106,7 +117,7 @@ handle_continue(schedule_work, State0) ->
 handle_call(Msg, From, State) ->
     ?LOG_WARNING(#{
         reason => "Unhandled call",
-        message => Msg,
+        description => Msg,
         from => From
     }),
     {reply, {error, not_implemented}, State}.
@@ -115,7 +126,7 @@ handle_call(Msg, From, State) ->
 handle_cast(Msg, State) ->
     ?LOG_WARNING(#{
         reason => "Unhandled cast",
-        message => Msg
+        description => Msg
     }),
     {noreply, State}.
 
@@ -128,14 +139,14 @@ handle_info(
             {noreply, State}
     catch
         error:Reason when Reason == overload orelse Reason == timeout ->
-            State1 = schedule_work(fail, State0),
+            State1 = schedule_work(Reason, State0),
             {noreply, State1}
     end;
 
 handle_info(Msg, State) ->
     ?LOG_WARNING(#{
         reason => "Unhandled info",
-        message => Msg
+        description => Msg
     }),
     {noreply, State}.
 
@@ -157,17 +168,19 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %% @private
-get_db_connection() ->
+get_riak_connection() ->
     Host = reliable_config:riak_host(),
     Port = reliable_config:riak_port(),
 
+    %% We link to the connection, so if it crashes we will crash too and be
+    %% restarted by reliable_partition_store_sup
     {ok, Conn} = riakc_pb_socket:start_link(Host, Port),
-    %% Crashes
+
+    %% We verify the connection works, otherwise we also crash
     pong = riakc_pb_socket:ping(Conn),
-    ?LOG_DEBUG(#{
-        message => "Got connection to Riak",
-        pid => Conn
-    }),
+
+    ?LOG_DEBUG(#{description => "Got connection to Riak"}),
+
     Conn.
 
 
@@ -179,42 +192,54 @@ get_db_connection() ->
 schedule_work(State) ->
     Floor = reliable_config:get(pull_backoff_min, 2000),
     Ceiling = reliable_config:get(pull_backoff_max, 60000),
+
+    is_integer(Floor) andalso is_integer(Ceiling) orelse error(badarg),
+
     %% Will send ourselves a message {timeout, Ref, fetch_work}
-    %% that we will handle in handle_info/2
+    %% which we will handle in handle_info/2
     B = backoff:type(
         backoff:init(Floor, Ceiling, self(), fetch_work),
         jitter
     ),
+
     ?LOG_DEBUG(#{
-        pid => self(),
-        message => "Fetch work scheduled",
+        description => "Backoff initialised, fetch work scheduled",
         delay => backoff:get(B)
     }),
+
     State#state{
         fetch_backoff = B,
         fetch_timer_ref = backoff:fire(B)
     }.
 
 
-schedule_work(succeed, #state{fetch_backoff = B0} = State) ->
+%% @private
+schedule_work(ok, #state{fetch_backoff = B0} = State)
+when B0 =/= undefined ->
+    %% Riak connection is OK
     {_, B1} = backoff:succeed(B0),
+
     ?LOG_DEBUG(#{
-        pid => self(),
-        message => "Fetch work scheduled",
+        description => "Fetch work scheduled",
         delay => backoff:get(B1)
     }),
+
     State#state{
         fetch_backoff = B1,
         fetch_timer_ref = backoff:fire(B1)
     };
 
-schedule_work(fail, #state{fetch_backoff = B0} = State) ->
+schedule_work(Reason, #state{fetch_backoff = B0} = State)
+when B0 =/= undefined ->
+    %% Riak connection is not OK, overload or timeouts
     {_, B1} = backoff:fail(B0),
+
     ?LOG_DEBUG(#{
-        pid => self(),
-        message => "Fetch work scheduled",
+        description => "Fetch work scheduled with incremented backoff",
+        reason => Reason,
         delay => backoff:get(B1)
     }),
+
     State#state{
         fetch_backoff = B1,
         fetch_timer_ref = backoff:fire(B1)
@@ -226,24 +251,14 @@ schedule_work(fail, #state{fetch_backoff = B0} = State) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-process_work(State0) ->
+process_work(StoreRef, Bucket) ->
     StoreRef = State0#state.store_ref,
-    Bucket = State0#state.bucket,
-
-    LogCtxt = #{
-        pid => self(),
-        partition => Bucket
-    },
-
-    ?LOG_DEBUG(LogCtxt#{message => "Fetching work"}),
-
-    %% We retrieve the work list from the partition store server
-    %% We ignore the continuation, we simply query again on the next
-    %% scheduled run.
     Opts = #{max_results => ?LIST_MAX_RESULTS},
 
-    case reliable_partition_store:list(StoreRef, Opts) of
-        {ok, {WorkList, _Cont}} ->
+    case pop_work(StoreRef, Opts) of
+        {ok, WorkList} ->
+            ok = process_work(WorkList, StoreRef, Bucket, []),
+
             %% Iterate through work that needs to be done.
             {Completed, State1} = lists:foldl(
                 fun process_work/2,
@@ -251,20 +266,35 @@ process_work(State0) ->
                 WorkList
             ),
 
-            ?LOG_DEBUG(LogCtxt#{
-                message => "Completed work",
+            ?LOG_DEBUG(#{
+                description => "Completed work",
                 work_ids => Completed
             }),
             {ok, State1};
 
         {error, Reason} ->
             %% We will try later
-            ?LOG_ERROR(LogCtxt#{
-                message => "Failed when listing work",
-                store => StoreRef,
+            ?LOG_ERROR(#{
+                description => "Failed when listing work. Nothing done.",
                 reason => Reason
             }),
             {ok, State0}
+    end.
+
+
+%% @private
+pop_work(StoreRef, Opts) ->
+
+    ?LOG_DEBUG(#{description => "Fetching work"}),
+
+    case reliable_partition_store:list(StoreRef, Opts) of
+        {ok, {WorkList, _Cont}} ->
+            %% We ignore the continuation, we simply query again on the next
+            %% scheduled run.
+            {ok, WorkList};
+
+        {error, _} = Error ->
+            Error
     end.
 
 
@@ -285,7 +315,7 @@ process_work(Work, {Acc, State0}) ->
         nbr_of_tasks => N
     },
 
-    ?LOG_DEBUG(LogCtxt#{message => "Performing work"}),
+    ?LOG_DEBUG(LogCtxt#{description => "Performing work"}),
 
     %% Only remove the work when all of the work items are done.
     case do_process_work(Work, State0) of
@@ -295,17 +325,17 @@ process_work(Work, {Acc, State0}) ->
             %% TODO At the moment we are removing but we should update instead
             %% and let the store backend decide where to store the completed
             %% work so that users can check and report.
-            ?LOG_DEBUG(LogCtxt#{
-                message => "Work completed, attempting delete from store"
-            }),
+            ?LOG_INFO(LogCtxt#{description => "Work completed"}),
 
-            ok = reliable_partition_store:delete(StoreRef, WorkId),
-
-            %% Cache so that we avoiud printing a warming if next batch
+            %% Cache so that we avoid considering it if next batch
             %% includes this WorkId. This happens with the
             %% reliable_riak_store_backend as the $bucket index is slow to get
-            %% updated.
+            %% updated after a delete.
             ok = reliable_cache:put(WorkId),
+
+            %% This call might crash, but is not a problem as the store backend
+            %% will delete it when found in cache and if not we will execut
+            ok = reliable_partition_store:delete(StoreRef, WorkId),
 
             WorkRef = reliable_work:ref(StoreRef, Work),
             Payload = reliable_work:event_payload(Work),
@@ -318,21 +348,20 @@ process_work(Work, {Acc, State0}) ->
             {Acc ++ [WorkId], State1};
 
         #state{work_state = #{last_ok := false}} = State1 ->
-            ?LOG_DEBUG(LogCtxt#{message => "Work NOT YET completed"}),
+            %% TODO This leaves the work in the store partially completed and
+            %% proceeds with the next one, but this is wrong. If the error was
+            %% a connection, timeout or overload error we will experience the
+            %% same with the next job, so we should keep trying this one. If,
+            %% however, the issue was a malformed task and thus irrecoverable
+            %% the we should move this to a DLQ and carry on with the next.
+            ?LOG_DEBUG(LogCtxt#{description => "Work NOT YET completed"}),
             {Acc, State1}
     end.
 
 
 %% @private
 reset_work_state(State) ->
-    WorkState = #{
-        last_ok => true,
-        work => undefined,
-        completed => [],
-        count => 0,
-        nbr_of_tasks => 0
-    },
-    State#state{work_state = WorkState}.
+    State#state{work_state = undefined}.
 
 
 %% @private
@@ -354,7 +383,7 @@ process_tasks(Last, #state{work_state = #{last_ok := false} = WS0} = State) ->
     Work = maps:get(work, WS0),
     %% Don't iterate if the last item wasn't completed.
     ?LOG_INFO(#{
-        message => "Not attempting next item, since last failed.",
+        description => "Not attempting next item, since last failed.",
         work_id => reliable_work:id(Work)
     }),
     WS1 = WS0#{
@@ -369,14 +398,13 @@ process_tasks(Last, #state{work_state = #{last_ok := true} = WS0} = State) ->
     Work = maps:get(work, WS0),
 
     ?LOG_DEBUG(#{
-        message => "Found task to be performed.",
+        description => "Found task to be performed.",
         work_id => reliable_work:id(Work),
         task_id => TaskId,
         task => Task0
     }),
 
     case reliable_task:result(Task0) of
-
         undefined ->
             {Bool, NewWork} = do_process_task({TaskId, Task0}, State),
             WS1 = WS0#{
@@ -410,26 +438,29 @@ do_process_task({TaskId, Task0}, State) ->
 
     %% Attempt to perform task.
     try
-        Node = reliable_task:node(Task0),
+        %% Node = reliable_task:node(Task0),
         Module = reliable_task:module(Task0),
         Function = reliable_task:function(Task0),
         Args = replace_symbolics(reliable_task:args(Task0), State),
 
         ?LOG_DEBUG(LogCtxt#{
-            message => "Trying to perform task",
+            description => "Trying to perform task",
             task => Task0,
-            node => Node,
+            %% node => Node,
             module => Module,
             function => Function,
             args => Args
         }),
 
-        Result = rpc:call(Node, Module, Function, Args),
+        %% Result = rpc:call(Node, Module, Function, Args),
+        %% TODO we need to identify if this error is temporal/recoverable i.e.
+        %% db connection or final/irrecoverable e.g. badarg
+        Result = erlang:apply(Module, Function, Args),
 
         Task1 = reliable_task:set_result(Result, Task0),
 
         ?LOG_DEBUG(LogCtxt#{
-            message => "Task result",
+            description => "Task result",
             result => Result
         }),
 
@@ -438,11 +469,13 @@ do_process_task({TaskId, Task0}, State) ->
 
         case maybe_update(StoreRef, NewWork, State) of
             true ->
-                ?LOG_DEBUG(LogCtxt#{message => "Work updated in store"}),
+                ?LOG_DEBUG(LogCtxt#{
+                    description => "Work updated in store"
+                }),
                 {true, NewWork};
             false ->
                 ?LOG_DEBUG(LogCtxt#{
-                    message => "Updating work in store delayed"
+                    description => "Updating work in store delayed"
                 }),
                 {true, NewWork};
             {error, Reason} ->
@@ -451,13 +484,13 @@ do_process_task({TaskId, Task0}, State) ->
     catch
         throw:EReason ->
             ?LOG_DEBUG(LogCtxt#{
-                message => "Updating work in store failed",
+                description => "Updating work in store failed",
                 reason => EReason
             }),
             {false, Work};
         Class:EReason:Stacktrace ->
             ?LOG_ERROR(LogCtxt#{
-                message => "Exception while performing task",
+                description => "Exception while performing task",
                 reason => EReason,
                 class => Class,
                 stacktrace => Stacktrace

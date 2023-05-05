@@ -47,8 +47,8 @@ start_link() ->
 init([]) ->
     SupFlags = #{
         strategy => one_for_one,
-        intensity => 0,
-        period => 1
+        intensity => 1,
+        period => 5
     },
 
     %% We spawn a child per store partition. Each server is the single writer

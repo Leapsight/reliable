@@ -17,3 +17,6 @@ _build
 *.iml
 rebar3.crashdump
 *~
+/reliable_dets_data
+doc/*
+/doc/.build

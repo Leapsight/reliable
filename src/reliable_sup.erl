@@ -86,8 +86,8 @@ init([]) ->
 
     SupFlags = #{
         strategy => one_for_all,
-        intensity => 0,
-        period => 1
+        intensity => 1,
+        period => 5
     },
 
     CacheOpts = [{n, 5}, {ttl, 30}],
@@ -118,6 +118,10 @@ init([]) ->
 
 
 add_riak_pool() ->
+    %% Remove the pool just in case it exists as we want to use the latest
+    %% config.
+    ok = riak_pool:remove_pool(reliable),
+
     Config = case reliable_config:get(riak_pool, undefined) of
         undefined ->
             Size = length(reliable_config:instances()),
@@ -128,9 +132,12 @@ add_riak_pool() ->
         Term when is_map(Term) ->
             Term
     end,
+
+    %% eqwalizer:ignore Config
     case riak_pool:add_pool(reliable, Config) of
         ok ->
             ok;
+
         {error, Reason} ->
             throw(Reason)
     end.

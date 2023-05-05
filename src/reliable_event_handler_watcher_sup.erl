@@ -66,7 +66,9 @@ start_link() ->
 -spec start_watcher(
     Manager :: module(),
     {swap, OldHandler :: {module(), any()}, NewHandler :: {module(), any()}}) ->
-    ok | {error, any()}.
+    {ok, Child :: supervisor:child()} |
+    {ok, Child :: supervisor:child(), Info :: term()} |
+    {error, supervisor:startchild_err()}.
 
 start_watcher(Manager, {swap, {_, _}, {_, _}} = Cmd) ->
     supervisor:start_child(?MODULE, [Manager, Cmd]).
@@ -77,7 +79,9 @@ start_watcher(Manager, {swap, {_, _}, {_, _}} = Cmd) ->
 %% @end
 %% -----------------------------------------------------------------------------
 -spec start_watcher(Manager :: module(), Handler :: module(), Args :: any()) ->
-    ok | {error, any()}.
+    {ok, Child :: supervisor:child()} |
+    {ok, Child :: supervisor:child(), Info :: term()} |
+    {error, supervisor:startchild_err()}.
 
 start_watcher(Manager, Handler, Args) ->
     supervisor:start_child(?MODULE, [Manager, Handler, Args]).
