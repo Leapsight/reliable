@@ -101,7 +101,7 @@ init([QueueRef, Bucket]) ->
 %%
 %% - `connect': obtains a connection to Riak KV (there is no reconnect as we
 %% use the Riak client auto_reconnect option).
-%% - `work'
+%% - `{backoff, normal | any()}'
 %% - `work'
 %% @end
 %% -----------------------------------------------------------------------------
