@@ -12,7 +12,8 @@ all() ->
         index_test,
         workflow_do_nothing_test,
         workflow_error_test,
-        workflow_1_test
+        workflow_1_test,
+        disconnected_workflow_1_test
     ].
 
 init_per_suite(Config) ->
@@ -24,6 +25,8 @@ init_per_suite(Config) ->
     %% meck:new(reliable, [passthrough]),
     %% We remove all work from the queues
     ok = reliable_partition_store:flush_all(),
+
+    meck:new(reliable_partition_worker, [passthrough, no_link]),
     ct:pal("Env ~p~n", [application:get_all_env(reliable)]),
     Config.
 
@@ -162,4 +165,35 @@ workflow_1_test(_) ->
         Conn, {<<"sets">>, <<"users">>}, <<"users">>),
     ?assertEqual(true, lists:member(<<"aramallo">>, riakc_set:value(I))),
     ok.
+
+
+disconnected_workflow_1_test(Config) ->
+    persistent_term:put({?MODULE, disconnected}, 3),
+
+
+    meck:expect(reliable_partition_worker, store_work,
+        fun(QueueRef, Work) ->
+            case persistent_term:get({?MODULE, disconnected}) of
+                Cnt when is_integer(Cnt), Cnt > 0 ->
+                    {error, disconnected};
+                _ ->
+                    meck:passthrough([QueueRef, Work])
+            end
+        end
+    ),
+    meck:expect(reliable_partition_worker, ack,
+        fun(Status, QueueRef, Work) ->
+            case persistent_term:get({?MODULE, disconnected}) of
+                Cnt when is_integer(Cnt), Cnt > 0 ->
+                    persistent_term:put({?MODULE, disconnected}, Cnt - 1),
+                    {error, disconnected};
+                _ ->
+                    meck:passthrough([Status, QueueRef, Work])
+            end
+        end
+    ),
+    workflow_1_test(Config).
+
+
+
 
