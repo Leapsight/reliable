@@ -211,7 +211,7 @@ handle_continue(work, #state{pending = []} = State) ->
             continue({backoff, normal}, State);
 
         {ok, L} ->
-            continue(work, State#state{pending = L});
+            continue(work, reset_backoff(State#state{pending = L}));
 
         {error, Reason} ->
             ?LOG_WARNING(#{
