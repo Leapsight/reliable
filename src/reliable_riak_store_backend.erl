@@ -119,8 +119,6 @@ enqueue(Ref, Bucket, Work, Opts) when is_map(Opts) ->
             Result;
 
         {error, _} = Error ->
-            %% TODO If unrecoverable, send to Quarantine queue, Dead-letter
-            %% queue
             Error
     end.
 
