@@ -35,6 +35,7 @@
 -export([delete/4]).
 -export([delete_all/4]).
 -export([enqueue/4]).
+-export([move/5]).
 -export([flush/3]).
 -export([fold/5]).
 -export([get/4]).
@@ -185,7 +186,7 @@ delete(Pid, Bucket, WorkId, Opts) when is_pid(Pid), is_map(Opts) ->
     end;
 
 delete(Ref, Bucket, WorkId, Opts) when is_atom(Ref), is_map(Opts) ->
-    Fun = fun(Pid) ->
+    Fun = fun(Pid) when is_pid(Pid) ->
         case delete(Pid, Bucket, WorkId, Opts) of
             ok ->
                 ok;
@@ -295,6 +296,52 @@ update(Ref, Bucket, Work, Opts) ->
             Error
     end.
 
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec move(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    NewBucket :: binary(),
+    Work :: reliable_work:t(),
+    Opts :: opts()) -> ok | {error, Reason :: any()}.
+
+move(Ref, Bucket, NewBucket, Work, undefined) ->
+    move(Ref, Bucket, NewBucket, Work, #{timeout => 15000});
+
+move(Ref, Bucket, NewBucket, Work, Opts) when is_map(Opts) ->
+    WorkId = reliable_work:id(Work),
+
+    Fun = fun(Pid) ->
+        Object = riakc_obj:new(NewBucket, WorkId, term_to_binary(Work)),
+
+        %% eqwalizer:ignore Object
+        case riakc_pb_socket:put(Pid, Object) of
+            ok ->
+                delete(Pid, Bucket, WorkId, Opts);
+
+            {error, Reason} ->
+                %% Determines if error reason is recoverable or not
+                %% Log (Info|Error) if (yes|no)
+                %% If server error or timeout and recoverable but not overload,
+                %% might retry with backoff (this blocks the worker but the next
+                %% workflow will probably fail with this reason too) if allowed
+                %% by Opts
+                maybe_throw(reliable_riak_util:format_error_reason(Reason))
+        end
+    end,
+
+    %% eqwalizer:ignore Ref
+    case riak_pool:execute(Ref, Fun, Opts) of
+        {ok, Result} ->
+            %% eqwalizer:ignore Result
+            Result;
+
+        {error, _} = Error ->
+            Error
+    end.
 
 %% -----------------------------------------------------------------------------
 %% @doc

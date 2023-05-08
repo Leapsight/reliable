@@ -439,7 +439,7 @@ move_to_dlq(Name, Work, Opts) ->
 move_to_dlq(Name, Work, Opts, Timeout) ->
     case reliable_work:is_type(Work) of
         true ->
-            safe_call(Name, {move_to_dlq, Name, Work, Opts}, Timeout);
+            safe_call(Name, {move_to_dlq, Work, Opts}, Timeout);
         false ->
             error({badarg, Work})
     end.
@@ -600,39 +600,12 @@ handle_call({delete, WorkIds, Opts}, _From, #state{} = State) ->
     Reply = BackendMod:delete_all(Ref, Bucket, WorkIds, Opts),
     {reply, Reply, State};
 
-handle_call({move_to_dlq, Name, Work, Opts}, From, #state{} = State) ->
+handle_call({move_to_dlq, Work, Opts}, _From, #state{} = State) ->
     BackendMod = State#state.backend,
-    BackendRef = State#state.backend_ref,
+    Ref = State#state.backend_ref,
     Bucket = State#state.bucket,
-
-    Reply =
-        case BackendMod:delete(Name, Bucket, Work) of
-            ok ->
-                DLQBucket = State#state.dlq_bucket,
-                Result = do_enqueue(
-                    Name, BackendMod, BackendRef, DLQBucket, Work, Opts
-                ),
-                case Result of
-                    {ok, WorkRef} ->
-                        _ = gen_server:reply(From, {ok, WorkRef}),
-                        Payload = reliable_work:event_payload(Work),
-                        Event = {
-                            reliable_event,
-                            #{
-                                status => moved_to_dlq,
-                                work_ref => WorkRef,
-                                payload => Payload
-                            }
-                        },
-                        ok = reliable_event_manager:notify(Event);
-
-                    {error, _} = Error ->
-                        Error
-                end;
-
-            {error, _} = Error ->
-                Error
-        end,
+    DLQBucket = State#state.dlq_bucket,
+    Reply = BackendMod:move(Ref, Bucket, DLQBucket, Work, Opts),
     {reply, Reply, State};
 
 handle_call(Msg, From, State) ->
@@ -709,3 +682,4 @@ do_enqueue(Name, BackendMod, Ref, Bucket, Work, Opts) ->
             }),
            Error
     end.
+

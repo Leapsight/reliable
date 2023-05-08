@@ -40,6 +40,7 @@
 -export([get/4]).
 -export([init/0]).
 -export([list/3]).
+-export([move/5]).
 -export([update/4]).
 
 
@@ -161,6 +162,21 @@ delete_all(Ref, _Bucket, WorkIds, _) ->
 
 update(Ref, _Bucket, Work, _Opts) ->
     dets:insert(Ref, Work).
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec move(
+    Ref :: reliable_store_backend:ref(),
+    Bucket :: binary(),
+    NewBucket :: binary(),
+    Work :: reliable_work:t(),
+    Opts :: map()) -> ok | {error, Reason :: any()}.
+
+move(_Ref, _Bucket, _NewBucket, _Work, _Opts) ->
+    {error, not_implemented}.
 
 
 %% -----------------------------------------------------------------------------
