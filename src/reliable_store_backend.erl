@@ -75,6 +75,14 @@
     Opts :: opts()) -> ok | {error, Reason :: error_reason()}.
 
 
+-callback move(
+    Ref :: ref(),
+    Bucket :: binary(),
+    NewBucket :: binary(),
+    Work :: reliable_work:t(),
+    Opts :: opts()) -> ok | {error, Reason :: any()}.
+
+
 -callback count(Ref :: ref(), Bucket :: binary(), Opts :: opts()) ->
     {ok, Count :: integer()} | {error, Reason :: any()}.
 

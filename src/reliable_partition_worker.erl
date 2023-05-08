@@ -636,6 +636,7 @@ ack(completed, QueueRef, Work) ->
     reliable_partition_store:delete(QueueRef, Work);
 
 ack(failed, QueueRef, Work) ->
+    %% We move the workd to DLQ
     reliable_partition_store:move_to_dlq(QueueRef, Work, #{}).
 
 
