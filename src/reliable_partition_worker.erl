@@ -277,18 +277,23 @@ code_change(_OldVsn, State, _Extra) ->
 
 %% @private
 new_retry() ->
-    Tag = work, %% fired timeout signal will use this Tag
+    Tag = work, % fired timeout signal will use this Tag
+    Config = reliable_config:get(worker_retry),
+    Type = maps:get(backoff_type, Config, jitter),
+    Floor = maps:get(backoff_min, Config, timer:seconds(1)),
+    Ceiling = maps:get(backoff_max, Config, timer:minutes(1)),
+    Deadline = maps:get(deadline, Config, 0), % disabled
+    MaxRetries = maps:get(max_retries, Config, 0), % disabled
 
-    Floor = reliable_config:get(pull_backoff_min, timer:seconds(2)),
-    Ceiling = reliable_config:get(pull_backoff_max, timer:minutes(1)),
 
-    is_integer(Floor) andalso is_integer(Ceiling) orelse error(badarg),
+    is_integer(Floor) andalso is_integer(Ceiling) andalso Floor < Ceiling
+        orelse error(badarg),
 
     reliable_retry:init(Tag, #{
-        deadline => timer:minutes(10),
-        max_retries => 100,
         backoff_enabled => true,
-        backoff_type => jitter,
+        deadline => Deadline,
+        max_retries => MaxRetries,
+        backoff_type => Type,
         backoff_min => Floor,
         backoff_max => Ceiling
     }).
@@ -343,6 +348,18 @@ get_riak_connection() ->
 %% @private
 continue(Cmd, State) ->
     {noreply, State, {continue, Cmd}}.
+
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+reset_backoff(#state{retry = R0} = State) ->
+    %% We reset the retry strategy
+    {_, R1} = reliable_retry:succeed(R0),
+    State#state{retry = R1}.
+
 
 
 %% -----------------------------------------------------------------------------
