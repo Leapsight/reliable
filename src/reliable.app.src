@@ -1,6 +1,6 @@
 {application, reliable, [
     {description, "Reliable is an open source Erlang/OTP application that ensures a sequence of write and/or delete operations in Riak KV are guaranteed to eventually occur, and occur in order."},
-    {vsn, "0.3.7"},
+    {vsn, "0.4.0"},
     {registered, []},
     {mod, {reliable_app, []}},
     {applications, [

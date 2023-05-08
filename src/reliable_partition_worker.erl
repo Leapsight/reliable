@@ -32,22 +32,19 @@
 -define(LIST_MAX_RESULTS, 100).
 
 -record(state, {
-    store_ref               ::  atom(),
+    queue_ref               ::  atom(),
     bucket                  ::  binary(),
-    symbolics               ::  dict:dict(),
-    fetch_backoff           ::  backoff:backoff() | undefined,
-    fetch_timer_ref         ::  reference() | undefined,
-    work_state              ::  work_state() | undefined
+    symbolics = #{}         ::  map(),
+    pending = []            ::  [reliable_work:t()],
+    pending_acks = []       ::  [{status(), reliable_work:t()}],
+    retry                   ::  reliable_retry:t(),
+    retry_tref              ::  reference() | undefined,
+    task_retry              ::  reliable_retry:t(),
+    task_count = 0          ::  non_neg_integer()
 }).
 
--type work_state()          ::  #{
-    work            :=  reliable_work:t(),
-    last_ok         :=  boolean(),
-    completed       :=  [reliable_task:t()],
-    nbr_of_tasks    :=  non_neg_integer(),
-    count           :=  non_neg_integer()
-}.
-
+-type state()               ::  #state{}.
+-type status()              ::  completed | failed.
 
 %% API
 -export([start_link/3]).
@@ -61,8 +58,6 @@
 -export([terminate/2]).
 -export([code_change/3]).
 
--eqwalizer({nowarn_function, maybe_update/3}).
-
 
 
 %% =============================================================================
@@ -71,11 +66,11 @@
 
 
 -spec start_link(
-    WorkerName :: atom(), StoreRef :: atom(), Bucket :: binary()) ->
+    WorkerName :: atom(), QueueRef :: atom(), Bucket :: binary()) ->
     {ok, pid()} | ignore | {error, any()}.
 
-start_link(WorkerName, StoreRef, Bucket) ->
-    gen_server:start_link({local, WorkerName}, ?MODULE, [StoreRef, Bucket], []).
+start_link(WorkerName, QueueRef, Bucket) ->
+    gen_server:start_link({local, WorkerName}, ?MODULE, [QueueRef, Bucket], []).
 
 
 
@@ -85,68 +80,181 @@ start_link(WorkerName, StoreRef, Bucket) ->
 
 
 
-init([StoreRef, Bucket]) ->
-    ?LOG_DEBUG("Initializing partition store; partition=~p", [Bucket]),
-    Continue = {get_riak_connection, [StoreRef, Bucket]},
+init([QueueRef, Bucket]) ->
+    ok = logger:set_process_metadata(#{reliable_partition => Bucket}),
 
-    ok = logger:update_process_metadata(#{partition => Bucket}),
+    ?LOG_DEBUG("Initializing partition worker"),
 
-    {ok, undefined, {continue, Continue}}.
+    State = #state{
+        queue_ref = QueueRef,
+        bucket = Bucket,
+        retry = new_retry(),
+        task_retry = new_task_retry()
+    },
+
+    %% We use handle_continue to loop while using exponential backoff.
+    %% The first thing we need to do is obtain a connection to Riak KV.
+    {ok, State, {continue, connect}}.
 
 
-handle_continue({get_riak_connection, [StoreRef, Bucket]}, undefined) ->
-    %% This the connection we will use to process the work
+%% -----------------------------------------------------------------------------
+%% @doc
+%% Accepts the following commands:
+%%
+%% - `connect': obtains a connection to Riak KV (there is no reconnect as we
+%% use the Riak client auto_reconnect option).
+%% - `{backoff, normal | any()}'
+%% - `work'
+%% @end
+%% -----------------------------------------------------------------------------
+handle_continue(connect, State0) ->
+    %% This is the connection we use to perform the tasks in reliable_work.
+    %% If we cannot obtain a connection this function will fail forcing this
+    %% server to crash here.
     Conn = get_riak_connection(),
 
-    %% Initialize symbolic variable dict.
-    Symbolics = dict:store(riakc, Conn, dict:new()),
-
-    State0 = #state{
-        store_ref = StoreRef,
-        bucket = Bucket,
-        symbolics = Symbolics
+    %% reliable_task(s) are MFAs denoting operations with Riak KV. The first
+    %% argument in those operations i the Riak KV connection which is opnly
+    %% known at runtime, so tasks use a form of variable (coined "symbolics" by
+    %% Chris) that we need to replace when performing the task.
+    %% The symbolics map is used for variable substitution used by
+    %% replace_symbolics/2.
+    State = State0#state{
+        symbolics = #{riakc => Conn}
     },
-    State1 = reset_work_state(State0),
-    {noreply, State1, {continue, schedule_work}};
+    continue({backoff, normal}, State);
 
-handle_continue(schedule_work, State0) ->
-    State1 = schedule_work(State0),
-    {noreply, State1}.
+handle_continue({backoff, Reason}, State0) ->
+    try
+        State = backoff(Reason, State0),
+        %% It is important to hibernate here, so that we trigger GC.
+        %% This is nice because chances are we are going to be doing
+        %% nothing till the next 'work' timeout signal is received.
+        %% check handle_info/2.
+        {noreply, State, hibernate}
+    catch
+        error:Reason when Reason == deadline; Reason == max_retries ->
+            %% We hit the retry limit, so we stop. This will trigger the
+            %% supervisor to restart the worker, so we have the opportunity to
+            %% resolve any environmental issues affecting the connection with
+            %% the queue which is causing the operations to fail.
+            {stop, Reason, State0}
+    end;
 
+handle_continue(work, #state{pending_acks = [{Status, Work} | Rest]} = State) ->
+    %% We have work that we need to acknowledge to queue. This is both when the
+    %% work was completed or when if failed. In both cases the work object will
+    %% be removed from the queue. In the case of a failed work it will me
+    %% published to the DLQ.
+    %% We will retry this operation till it works or till we hit the
+    %% max_retries or deadline limits.
+    %% This means no new work object is considered till we succeed in
+    %% acknowledging the previous one (pending_acks is a list but at the moment
+    %% it can contain at most one element).
+    QueueRef = State#state.queue_ref,
+    WorkId = reliable_work:id(Work),
 
-handle_call(Msg, From, State) ->
+    case ack(Status, QueueRef, Work) of
+        ok ->
+            ?LOG_INFO(#{
+                description => "Work acknowledged to queue.",
+                work_status => Status,
+                work_id => WorkId
+            }),
+            ok = notify(QueueRef, Status, Work),
+            continue(work, State#state{pending_acks = Rest});
+
+        {error, Reason} ->
+            ?LOG_ERROR(#{
+                description =>
+                    "Failed to acknowledge work to queue. "
+                    "Retrying using exponential backoff.",
+                reason => Reason,
+                work_id => WorkId
+            }),
+            continue({backoff, Reason}, State)
+    end;
+
+handle_continue(work, #state{pending = [Work | Rest]} = State0) ->
+    %% We have no more elements in pending_acks but we do have some additional
+    %% work objects we obtained from a previous ask.
+    %% This will go through each of the work's tasks, executing them using a
+    %% separate exponential backoff (task_retry). That is, the worker will try
+    %% to execute the tasks until completed or
+    %% failed.
+    case handle_work(Work, State0) of
+        {Status, _} = Result when Status == completed; Status == failed ->
+            State = State0#state{
+                pending_acks = [Result | State0#state.pending_acks],
+                pending = Rest
+            },
+            continue(work, State);
+
+        {error, Reason, Work} ->
+            %% This is a temporary failure (lost riak connection,
+            %% connection timeout, overload, etc), so we'll retry the same work
+            %% object using exponential backoff.
+            continue({backoff, Reason}, State0)
+    end;
+
+handle_continue(work, #state{pending = []} = State) ->
+    %% Cleanup logger metadata
+    ok = logger:set_process_metadata(#{
+        reliable_partition => State#state.bucket
+    }),
+
+    %% Nothing else pending, ask for more work from partition queue (store)
+    Opts = #{max_results => ?LIST_MAX_RESULTS},
+
+    case ask(State#state.queue_ref, Opts) of
+        {ok, []} ->
+            continue({backoff, normal}, State);
+
+        {ok, L} ->
+            continue(work, reset_backoff(State#state{pending = L}));
+
+        {error, Reason} ->
+            ?LOG_WARNING(#{
+                description => "Failed when listing work. Nothing done.",
+                reason => Reason
+            }),
+
+            continue({backoff, Reason}, State)
+    end;
+
+handle_continue(Event, State) ->
     ?LOG_WARNING(#{
-        reason => "Unhandled call",
-        description => Msg,
+        description => "Unhandled event",
+        event => Event
+    }),
+    {noreply, State}.
+
+
+handle_call(Event, From, State) ->
+    ?LOG_WARNING(#{
+        description => "Unhandled call",
+        event => Event,
         from => From
     }),
     {reply, {error, not_implemented}, State}.
 
 
-handle_cast(Msg, State) ->
+handle_cast(Event, State) ->
     ?LOG_WARNING(#{
-        reason => "Unhandled cast",
-        description => Msg
+        description => "Unhandled cast",
+        event => Event
     }),
     {noreply, State}.
 
 
-handle_info(
-    {timeout, Ref, fetch_work}, #state{fetch_timer_ref = Ref} = State0) ->
-    try process_work(State0) of
-        {ok, State1} ->
-            State = schedule_work(succeed, State1),
-            {noreply, State}
-    catch
-        error:Reason when Reason == overload orelse Reason == timeout ->
-            State1 = schedule_work(Reason, State0),
-            {noreply, State1}
-    end;
+handle_info({timeout, Ref, work}, #state{retry_tref = Ref} = State) ->
+    %% Do some work
+    continue(work, State);
 
-handle_info(Msg, State) ->
+handle_info(Event, State) ->
     ?LOG_WARNING(#{
-        reason => "Unhandled info",
-        description => Msg
+        description => "Unhandled info",
+        reason => Event
     }),
     {noreply, State}.
 
@@ -168,126 +276,138 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %% @private
+new_retry() ->
+    Tag = work, % fired timeout signal will use this Tag
+    Config = reliable_config:get(worker_retry),
+    Type = maps:get(backoff_type, Config, jitter),
+    Floor = maps:get(backoff_min, Config, timer:seconds(1)),
+    Ceiling = maps:get(backoff_max, Config, timer:minutes(1)),
+    Deadline = maps:get(deadline, Config, 0), % disabled
+    MaxRetries = maps:get(max_retries, Config, 0), % disabled
+
+
+    is_integer(Floor) andalso is_integer(Ceiling) andalso Floor < Ceiling
+        orelse error(badarg),
+
+    reliable_retry:init(Tag, #{
+        backoff_enabled => true,
+        deadline => Deadline,
+        max_retries => MaxRetries,
+        backoff_type => Type,
+        backoff_min => Floor,
+        backoff_max => Ceiling
+    }).
+
+
+%% @private
+new_task_retry() ->
+    reliable_retry:init(task, #{
+        deadline => 0, % infinity
+        max_retries => 0, % infinity
+        backoff_enabled => true,
+        backoff_type => jitter,
+        backoff_min => 500,
+        backoff_max => timer:minutes(15)
+    }).
+
+
+
+%% @private
+reset_state(State) ->
+    State#state{
+        task_retry = new_task_retry(),
+        task_count = 0
+    }.
+
+
+%% @private
 get_riak_connection() ->
     Host = reliable_config:riak_host(),
     Port = reliable_config:riak_port(),
+    %% If riakc gets disconnected dureing an operation we'll get
+    %% {error, disconnected} but we'll treat it as a temporal failure
+    %% as we are asking riakc to automatically reconnect.
+    Opts = [
+        {queue_if_disconnected, false},
+        {auto_reconnect, true},
+        {keepalive, true}
+    ],
 
     %% We link to the connection, so if it crashes we will crash too and be
     %% restarted by reliable_partition_store_sup
-    {ok, Conn} = riakc_pb_socket:start_link(Host, Port),
+    {ok, Conn} = riakc_pb_socket:start_link(Host, Port, Opts),
 
-    %% We verify the connection works, otherwise we also crash
-    pong = riakc_pb_socket:ping(Conn),
+    %% We verify the connection works, otherwise we crash
+    %% pong = riakc_pb_socket:ping(Conn),
 
     ?LOG_DEBUG(#{description => "Got connection to Riak"}),
 
     Conn.
 
 
+%% @private
+continue(Cmd, State) ->
+    {noreply, State, {continue, Cmd}}.
+
+
 %% -----------------------------------------------------------------------------
 %% @private
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-schedule_work(State) ->
-    Floor = reliable_config:get(pull_backoff_min, 2000),
-    Ceiling = reliable_config:get(pull_backoff_max, 60000),
-
-    is_integer(Floor) andalso is_integer(Ceiling) orelse error(badarg),
-
-    %% Will send ourselves a message {timeout, Ref, fetch_work}
-    %% which we will handle in handle_info/2
-    B = backoff:type(
-        backoff:init(Floor, Ceiling, self(), fetch_work),
-        jitter
-    ),
-
-    ?LOG_DEBUG(#{
-        description => "Backoff initialised, fetch work scheduled",
-        delay => backoff:get(B)
-    }),
-
-    State#state{
-        fetch_backoff = B,
-        fetch_timer_ref = backoff:fire(B)
-    }.
+reset_backoff(#state{retry = R0} = State) ->
+    %% We reset the retry strategy
+    {_, R1} = reliable_retry:succeed(R0),
+    State#state{retry = R1}.
 
 
+
+%% -----------------------------------------------------------------------------
 %% @private
-schedule_work(ok, #state{fetch_backoff = B0} = State)
-when B0 =/= undefined ->
-    %% Riak connection is OK
-    {_, B1} = backoff:succeed(B0),
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+backoff(normal, #state{retry = R0} = State) ->
+    %% We reset the retry strategy
+    {Delay, R1} = reliable_retry:succeed(R0),
 
     ?LOG_DEBUG(#{
-        description => "Fetch work scheduled",
-        delay => backoff:get(B1)
+        description => "Work scheduled",
+        delay => Delay
     }),
 
-    State#state{
-        fetch_backoff = B1,
-        fetch_timer_ref = backoff:fire(B1)
-    };
+    fire_backoff(R1, State);
 
-schedule_work(Reason, #state{fetch_backoff = B0} = State)
-when B0 =/= undefined ->
-    %% Riak connection is not OK, overload or timeouts
-    {_, B1} = backoff:fail(B0),
+backoff(Reason, #state{retry = R0} = State) ->
+    {Delay, R1} = reliable_retry:fail(R0),
 
     ?LOG_DEBUG(#{
-        description => "Fetch work scheduled with incremented backoff",
+        description => "Work scheduled with incremental backoff",
         reason => Reason,
-        delay => backoff:get(B1)
+        delay => Delay
     }),
 
+    fire_backoff(R1, State).
+
+
+%% @private
+fire_backoff(Retry, State) ->
     State#state{
-        fetch_backoff = B1,
-        fetch_timer_ref = backoff:fire(B1)
+        retry = Retry,
+        retry_tref = reliable_retry:fire(Retry)
     }.
 
 
+
 %% -----------------------------------------------------------------------------
 %% @private
-%% @doc
+%% @doc Returns the next batch of work items from the partition queue (store).
 %% @end
 %% -----------------------------------------------------------------------------
-process_work(StoreRef, Bucket) ->
-    StoreRef = State0#state.store_ref,
-    Opts = #{max_results => ?LIST_MAX_RESULTS},
-
-    case pop_work(StoreRef, Opts) of
-        {ok, WorkList} ->
-            ok = process_work(WorkList, StoreRef, Bucket, []),
-
-            %% Iterate through work that needs to be done.
-            {Completed, State1} = lists:foldl(
-                fun process_work/2,
-                {[], State0},
-                WorkList
-            ),
-
-            ?LOG_DEBUG(#{
-                description => "Completed work",
-                work_ids => Completed
-            }),
-            {ok, State1};
-
-        {error, Reason} ->
-            %% We will try later
-            ?LOG_ERROR(#{
-                description => "Failed when listing work. Nothing done.",
-                reason => Reason
-            }),
-            {ok, State0}
-    end.
-
-
-%% @private
-pop_work(StoreRef, Opts) ->
-
+ask(QueueRef, Opts) ->
     ?LOG_DEBUG(#{description => "Fetching work"}),
 
-    case reliable_partition_store:list(StoreRef, Opts) of
+    case reliable_partition_store:list(QueueRef, Opts) of
         {ok, {WorkList, _Cont}} ->
             %% We ignore the continuation, we simply query again on the next
             %% scheduled run.
@@ -298,245 +418,245 @@ pop_work(StoreRef, Opts) ->
     end.
 
 
-
 %% @private
-process_work(Work, {Acc, State0}) ->
-    StoreRef = State0#state.store_ref,
-    Bucket = State0#state.bucket,
-    WorkId = reliable_work:id(Work),
-    Payload = reliable_work:event_payload(Work),
-    N = reliable_work:nbr_of_tasks(Work),
+-spec handle_work(reliable_work:t(), state()) ->
+    {status(), reliable_work:t()}
+    | {error, Reason :: any(), reliable_work:t()}.
 
-    LogCtxt = #{
-        pid => self(),
-        work_id => WorkId,
-        partition => Bucket,
-        event_payload => Payload,
-        nbr_of_tasks => N
-    },
+handle_work(Work, State0) ->
+    ok = logger:update_process_metadata(#{
+        reliable_work_id => reliable_work:id(Work)
+    }),
 
-    ?LOG_DEBUG(LogCtxt#{description => "Performing work"}),
+    State = reset_state(State0),
 
-    %% Only remove the work when all of the work items are done.
-    case do_process_work(Work, State0) of
-        #state{work_state = #{last_ok := true}} = State1 ->
-            %% We made it through the entire list with a result for
-            %% everything.
-            %% TODO At the moment we are removing but we should update instead
-            %% and let the store backend decide where to store the completed
-            %% work so that users can check and report.
-            ?LOG_INFO(LogCtxt#{description => "Work completed"}),
-
-            %% Cache so that we avoid considering it if next batch
-            %% includes this WorkId. This happens with the
-            %% reliable_riak_store_backend as the $bucket index is slow to get
-            %% updated after a delete.
-            ok = reliable_cache:put(WorkId),
-
-            %% This call might crash, but is not a problem as the store backend
-            %% will delete it when found in cache and if not we will execut
-            ok = reliable_partition_store:delete(StoreRef, WorkId),
-
-            WorkRef = reliable_work:ref(StoreRef, Work),
-            Payload = reliable_work:event_payload(Work),
-            Event = {reliable_event, #{
-                status => completed,
-                work_ref => WorkRef,
-                payload => Payload
-            }},
-            ok = reliable_event_manager:notify(Event),
-            {Acc ++ [WorkId], State1};
-
-        #state{work_state = #{last_ok := false}} = State1 ->
-            %% TODO This leaves the work in the store partially completed and
-            %% proceeds with the next one, but this is wrong. If the error was
-            %% a connection, timeout or overload error we will experience the
-            %% same with the next job, so we should keep trying this one. If,
-            %% however, the issue was a malformed task and thus irrecoverable
-            %% the we should move this to a DLQ and carry on with the next.
-            ?LOG_DEBUG(LogCtxt#{description => "Work NOT YET completed"}),
-            {Acc, State1}
+    try
+        handle_work(reliable_work:tasks(Work), Work, State)
+    catch
+        throw:Reason ->
+            {error, Reason, Work}
     end.
 
 
+%% -----------------------------------------------------------------------------
 %% @private
-reset_work_state(State) ->
-    State#state{work_state = undefined}.
+%% If a task fails and the failure is temporary (transient or intermittent),
+%% it will keep on retrying using exponential backoff and thus
+%% not returning.
+%%
+%% This is under the assumption that transient and intermittent failures are
+%% Riak KV related (as currently Reliable is designed to perform Riak KV
+%% operations only - even if the API allows tasks to be anything).
+%%
+%% If the failure is permanent, teh function will return `{error, Reason}'.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec handle_work(
+    [{pos_integer(), reliable_task:t()}], reliable_work:t(), state()) ->
+    {status(), reliable_work:t()}.
 
-
-%% @private
-do_process_work(Work, State0) ->
-    Tasks = reliable_work:tasks(Work),
-    WorkState = #{
-        last_ok => true,
-        work => Work,
-        completed => [],
-        nbr_of_tasks => length(Tasks),
-        count => 0
-    },
-    State = State0#state{work_state = WorkState},
-    lists:foldl(fun process_tasks/2, State, Tasks).
-
-
-%% @private
-process_tasks(Last, #state{work_state = #{last_ok := false} = WS0} = State) ->
-    Work = maps:get(work, WS0),
-    %% Don't iterate if the last item wasn't completed.
-    ?LOG_INFO(#{
-        description => "Not attempting next item, since last failed.",
-        work_id => reliable_work:id(Work)
-    }),
-    WS1 = WS0#{
-        count => maps:get(count, WS0) + 1,
-        completed => maps:get(completed, WS0) ++ [Last]
-    },
-    State#state{work_state = WS1};
-
-
-process_tasks(Last, #state{work_state = #{last_ok := true} = WS0} = State) ->
-    {TaskId, Task0} = Last,
-    Work = maps:get(work, WS0),
+handle_work([{TaskId, Task0}|T], Work0, State0) ->
+    Status = reliable_task:status(Task0),
 
     ?LOG_DEBUG(#{
         description => "Found task to be performed.",
-        work_id => reliable_work:id(Work),
         task_id => TaskId,
-        task => Task0
+        task => Task0,
+        partition => State0#state.bucket,
+        status => Status
     }),
 
-    case reliable_task:result(Task0) of
-        undefined ->
-            {Bool, NewWork} = do_process_task({TaskId, Task0}, State),
-            WS1 = WS0#{
-                last_ok => Bool,
-                count => maps:get(count, WS0) + 1,
-                completed => maps:get(completed, WS0) ++ [Last],
-                work => NewWork
-            },
-            State#state{work_state = WS1};
-        _ ->
-            %% Task already had a result, it was processed before
-            WS1 = WS0#{
-                last_ok => true,
-                count => maps:get(count, WS0) + 1,
-                completed => maps:get(completed, WS0) ++ [Last]
-            },
-            State#state{work_state = WS1}
-    end.
+    case Status of
+        completed ->
+            %% Skip task
+            handle_work(T, Work0, State0);
+
+        Status when Status == undefined; Status == failed ->
+            %% handle_task/4 will retry the task infinitely only returning an
+            %% error in case there is a permanent failure.
+            case handle_task(TaskId, Task0, Work0, State0) of
+                {completed, Work} ->
+                    %% We store the work using a flow control mechanism.
+                    State = State0#state{
+                        task_count = State0#state.task_count + 1
+                    },
+                    ok = maybe_store_work(Work, State),
+
+                    %% We continue with next task.
+                    handle_work(T, Work, State);
+
+                {failed, _} = Result ->
+                    %% We stop
+                    Result
+            end
+    end;
+
+handle_work([], Work, _) ->
+    {completed, Work}.
 
 
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc IT is important that here we only perofmr operations with the Riak
+%% connection we own and not other operations such as reliable_partition_store
+%% as its backend might use Riak itself and we will get a wrong interpreation
+%% of the Riak errors.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec handle_task(
+    TaskId :: integer(), reliable_task:t(), reliable_work:t(), state()) ->
+    {status(), reliable_work:t()}.
 
-do_process_task({TaskId, Task0}, State) ->
-    %% Destructure work to be performed.
-    #{work := Work} = State#state.work_state,
-    StoreRef = State#state.store_ref,
+handle_task(TaskId, Task0, Work0, State) ->
+    ok = logger:update_process_metadata(#{
+        reliable_task_id => TaskId
+    }),
 
-    LogCtxt = #{
-        work_id => reliable_work:id(Work),
-        task_id => TaskId
-    },
+    ?LOG_DEBUG(#{
+        description => "Trying to perform task",
+        attempts => reliable_retry:count(State#state.task_retry)
+    }),
 
-    %% Attempt to perform task.
-    try
-        %% Node = reliable_task:node(Task0),
-        Module = reliable_task:module(Task0),
-        Function = reliable_task:function(Task0),
-        Args = replace_symbolics(reliable_task:args(Task0), State),
-
-        ?LOG_DEBUG(LogCtxt#{
-            description => "Trying to perform task",
-            task => Task0,
-            %% node => Node,
-            module => Module,
-            function => Function,
-            args => Args
-        }),
-
-        %% Result = rpc:call(Node, Module, Function, Args),
-        %% TODO we need to identify if this error is temporal/recoverable i.e.
-        %% db connection or final/irrecoverable e.g. badarg
-        Result = erlang:apply(Module, Function, Args),
-
-        Task1 = reliable_task:set_result(Result, Task0),
-
-        ?LOG_DEBUG(LogCtxt#{
-            description => "Task result",
-            result => Result
-        }),
-
-        %% Update task
-        NewWork = reliable_work:update_task(TaskId, Task1, Work),
-
-        case maybe_update(StoreRef, NewWork, State) of
-            true ->
-                ?LOG_DEBUG(LogCtxt#{
-                    description => "Work updated in store"
-                }),
-                {true, NewWork};
-            false ->
-                ?LOG_DEBUG(LogCtxt#{
-                    description => "Updating work in store delayed"
-                }),
-                {true, NewWork};
-            {error, Reason} ->
-                throw(Reason)
-        end
+    %% Result = rpc:call(Node, Module, Function, Args),
+    try apply_task(Task0, State) of
+        {error, Reason} ->
+            throw(Reason);
+        Res ->
+            Task1 = reliable_task:set_result(Res, Task0),
+            Task = reliable_task:set_status(completed, Task1),
+            Work = reliable_work:update_task(TaskId, Task, Work0),
+            {completed, Work}
     catch
-        throw:EReason ->
-            ?LOG_DEBUG(LogCtxt#{
-                description => "Updating work in store failed",
-                reason => EReason
-            }),
-            {false, Work};
         Class:EReason:Stacktrace ->
-            ?LOG_ERROR(LogCtxt#{
-                description => "Exception while performing task",
-                reason => EReason,
-                class => Class,
-                stacktrace => Stacktrace
-            }),
-            {false, Work}
+            Reason = reliable_riak_util:format_error_reason(EReason),
+            Task1 = reliable_task:set_result({error, EReason}, Task0),
+            Task = reliable_task:set_status(failed, Task1),
+            Work = reliable_work:update_task(TaskId, Task, Work0),
+            retry_task(
+                {Class, Reason, Stacktrace}, TaskId, Task, Work, State
+            )
     end.
 
 
 %% @private
-maybe_update(StoreRef, Work, State) ->
-    WS = State#state.work_state,
-    Count = maps:get(count, WS),
-    N = maps:get(nbr_of_tasks, WS),
-    Divisor = trunc(math:log2(max(2, N))),
+apply_task(Task, #state{} = State) ->
+    Module = reliable_task:module(Task),
+    Function = reliable_task:function(Task),
+    Symbolics = State#state.symbolics,
+    Args = replace_symbolics(reliable_task:args(Task), Symbolics),
+    erlang:apply(Module, Function, Args).
 
+
+%% @private
+retry_task({Class, datatype_mismatch = Reason, Stacktrace}, _, _, Work, _) ->
+    %% Permanent error
+    ?LOG_ERROR(#{
+        description => "Exception while performing task",
+        reason => Reason,
+        class => Class,
+        stacktrace => Stacktrace
+    }),
+    {failed, Work};
+
+retry_task(Reason, TaskId, Task, Work, State0)
+when
+Reason == too_many_fails orelse
+Reason == overload orelse
+Reason == timeout orelse
+Reason == disconnected orelse
+is_tuple(Reason) andalso element(1, Reason) == n_val_violation ->
+    %% Temporal error, sleep using exponential backoff and retry
+    %% We disabled max_retries and deadlines so this call will always return an
+    %% integer Delay.
+    case reliable_retry:fail(State0#state.task_retry) of
+        {Delay, R} when is_integer(Delay) ->
+            timer:sleep(Delay),
+            State = State0#state{task_retry = R},
+            handle_task(TaskId, Task, Work, State);
+
+        {FailReason, _}
+        when FailReason == deadline; FailReason == max_retries ->
+            %% This should not happen as we are disabling deadlines and
+            %% max_retries for tasks
+            ?LOG_ERROR(#{
+                description => "Failed to complete task.",
+                reason => FailReason
+            }),
+            {failed, Work}
+    end;
+
+retry_task(_, _, _, Work, _) ->
+    {failed, Work}.
+
+
+%% @private
+maybe_store_work(Work, State) ->
     %% We use log2 as a simple flow control mechanism, to avoid writing to
     %% store for every task update. For example, this will result in:
     %% 1 write when N = 1
     %% 2 writes when N = 5
     %% 3 writes when N = 100
-    %% 16 writes when N = 100
+    %% 16 writes when N = 500
     %% 111 writes when N = 1000
-    %% Plus the final write when the whole work is finished
-    case Count rem Divisor == 0 of
+    %% Plus the final write when the whole work is completed
+    N = reliable_work:nbr_of_tasks(Work),
+    Divisor = trunc(math:log2(max(2, N))),
+
+    case State#state.task_count rem Divisor == 0 of
         true ->
-            case reliable_partition_store:update(StoreRef, Work) of
-                ok -> true;
-                Error -> Error
-            end;
+            %% We ignore errors here
+            _ = store_work(State#state.queue_ref, Work),
+            ok;
+
         false ->
-            false
+            ?LOG_DEBUG(#{description => "Updating work in queue delayed"}),
+            ok
     end.
 
 
 %% @private
-replace_symbolics(Args, State) ->
+store_work(QueueRef, Work) ->
+    case reliable_partition_store:update(QueueRef, Work) of
+        ok ->
+            ?LOG_DEBUG(#{description => "Updated work in queue"}),
+            ok;
+        {error, Reason} = Error ->
+            ?LOG_ERROR(#{
+                description => "Failed to update work in queue",
+                reason => Reason
+            }),
+            Error
+    end.
+
+
+ack(completed, QueueRef, Work) ->
+    %% TODO At the moment we are removing but we should update
+    %% instead and let the store backend decide where to store
+    %% the completed work so that users can check and report.
+    reliable_partition_store:delete(QueueRef, Work);
+
+ack(failed, QueueRef, Work) ->
+    %% We move the workd to DLQ
+    reliable_partition_store:move_to_dlq(QueueRef, Work, #{}).
+
+
+%% -----------------------------------------------------------------------------
+%% @private
+%% @doc We replace the symbolics in the Task's arguments.
+%% Symbolics are variables that have to be replaced at runtime. In most cases
+%% this is the variable representing the Riak Connection which is a mandatory
+%% argument in all riakc function calls.
+%% @end
+%% -----------------------------------------------------------------------------
+-spec replace_symbolics(list(), map()) -> list().
+
+replace_symbolics(Args, Symbolics) when is_map(Symbolics) ->
     lists:map(
         fun(Arg) ->
             case Arg of
-                {symbolic, Symbolic} ->
-                    case dict:find(Symbolic, State#state.symbolics) of
-                        error ->
-                            Arg;
-                        {ok, Value} ->
-                            Value
-                    end;
+                {symbolic, Key} ->
+                    %% We default to the original symbolic value if not found
+                    maps:get(Key, Symbolics, Arg);
                 _ ->
                     Arg
             end
@@ -544,5 +664,21 @@ replace_symbolics(Args, State) ->
         Args
     ).
 
+
+%% @private
+notify(QueueRef, Status, Work) ->
+    WorkRef = reliable_work:ref(QueueRef, Work),
+    Payload = reliable_work:event_payload(Work),
+
+    Event = {
+        reliable_event,
+        #{
+            status => Status,
+            work_ref => WorkRef,
+            payload => Payload
+        }
+    },
+
+    ok = reliable_event_manager:notify(Event).
 
 

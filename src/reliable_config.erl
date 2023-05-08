@@ -1,3 +1,4 @@
+
 %% =============================================================================
 %%  reliable_sup.erl -
 %%
@@ -22,13 +23,21 @@
 -define(APP, reliable).
 
 -define(DEFAULT_BACKEND, reliable_riak_store_backend).
-
+-define(WORKER_DEFAULT_RETRY, #{
+    backoff_type => jitter,
+    backoff_min => timer:seconds(1),
+    backoff_max => timer:minutes(1),
+    deadline => timer:minutes(15),
+    max_retries => 50
+}).
 
 %% API
 -export([init/0]).
 -export([get/1]).
 -export([get/2]).
 -export([set/2]).
+-export([will_set/2]).
+-export([on_set/2]).
 
 
 %% API
@@ -75,7 +84,40 @@ init() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
+-spec will_set(Key :: key_value:key(), Value :: any()) ->
+    ok | {ok, NewValue :: any()} | {error, Reason :: any()}.
+
+will_set(worker_backoff, Value) when is_list(Value) ->
+    {ok, maps:from_list(Value)};
+
+will_set(worker_backoff, Value) when is_map(Value) ->
+    ok;
+
+will_set(worker_backoff, Value) ->
+    {error, {badarg, [worker_backoff, Value]}};
+
+will_set(_, _) ->
+    ok.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
+-spec on_set(Key :: key_value:key(), Value :: any()) -> ok.
+
+on_set(_, _) ->
+    ok.
+
+
+%% -----------------------------------------------------------------------------
+%% @doc
+%% @end
+%% -----------------------------------------------------------------------------
 -spec get(Key :: list() | atom() | tuple()) -> term().
+
+get(worker_retry) ->
+    get(worker_retry, ?WORKER_DEFAULT_RETRY);
 
 get(Key) ->
     app_config:get(?APP, Key).
@@ -270,15 +312,15 @@ do_partition(Hash) when is_integer(Hash) ->
 %% If instances are ["foo-0", "foo-1"] and N is 3 this will generate
 %% ```
 %% #{
-%%  "foo-0" => [
-%%         "foo-0_partition_1",
-%%         "foo-0_partition_2",
-%%         "foo-0_partition_3"
+%%  <<"foo-0">> => [
+%%         <<"foo-0_partition_1">>,
+%%         <<"foo-0_partition_2">>,
+%%         <<"foo-0_partition_3">>
 %%    ]
-%%  "foo-1" => [
-%%         "foo-1_partition_1",
-%%         "foo-1_partition_2",
-%%         "foo-1_partition_3"
+%%  <<"foo-1" => [
+%%         <<"foo-1_partition_1">>,
+%%         <<"foo-1_partition_2">>,
+%%         <<"foo-1_partition_3">>
 %%    ]
 %% }.
 %% '''

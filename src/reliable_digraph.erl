@@ -810,7 +810,7 @@ view(G, EdgesOrPred) when is_function(EdgesOrPred, 2) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-fold_view(_, #reliable_digraph_view{edges = undefined} = View, _, Acc) ->
+fold_view(_, #reliable_digraph_view{edges = undefined}, _, Acc) ->
     Acc;
 
 fold_view(G, View, Fun, Acc0) ->
