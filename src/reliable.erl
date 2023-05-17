@@ -156,11 +156,18 @@ enqueue(Tasks, Opts) ->
 enqueue(Tasks, Opts, Timeout)
 when is_list(Tasks) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
     WorkId = get_work_id(Opts),
-    PartitionKey = maps:get(partition_key, Opts, undefined),
     EventPayload = maps:get(event_payload, Opts, undefined),
 
     Work = reliable_work:new(WorkId, Tasks, EventPayload),
-    StoreRef = binary_to_atom(reliable_config:partition(PartitionKey), utf8),
+    PartitionKey =
+        case maps:get(partition_key, Opts, undefined) of
+            undefined ->
+                Work;
+            Value ->
+                Value
+        end,
+    Partition = reliable_config:partition(PartitionKey),
+    StoreRef = binary_to_atom(Partition, utf8),
     WorkRef = reliable_work:ref(StoreRef, Work),
 
     %% TODO remove false equality when subscriptions are implemented

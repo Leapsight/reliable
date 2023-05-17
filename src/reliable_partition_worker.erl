@@ -133,12 +133,12 @@ handle_continue({backoff, Reason}, State0) ->
         %% check handle_info/2.
         {noreply, State, hibernate}
     catch
-        error:Reason when Reason == deadline; Reason == max_retries ->
+        error:EReason when EReason == deadline; EReason == max_retries ->
             %% We hit the retry limit, so we stop. This will trigger the
             %% supervisor to restart the worker, so we have the opportunity to
             %% resolve any environmental issues affecting the connection with
             %% the queue which is causing the operations to fail.
-            {stop, Reason, State0}
+            {stop, EReason, State0}
     end;
 
 handle_continue(work, #state{pending_acks = [{Status, Work} | Rest]} = State) ->
@@ -517,11 +517,12 @@ handle_task(TaskId, Task0, Work0, State) ->
         attempts => reliable_retry:count(State#state.task_retry)
     }),
 
-    %% Result = rpc:call(Node, Module, Function, Args),
     try apply_task(Task0, State) of
-        {error, Reason} ->
+        {error, Reason} when Reason =/= unmodified ->
             throw(Reason);
         Res ->
+            %% Res includes {error, unmodified} which is a non-error return by
+            %% Riak when a Riak Datatype update operation has noop.
             Task1 = reliable_task:set_result(Res, Task0),
             Task = reliable_task:set_status(completed, Task1),
             Work = reliable_work:update_task(TaskId, Task, Work0),
