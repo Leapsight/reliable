@@ -517,11 +517,12 @@ handle_task(TaskId, Task0, Work0, State) ->
         attempts => reliable_retry:count(State#state.task_retry)
     }),
 
-    %% Result = rpc:call(Node, Module, Function, Args),
     try apply_task(Task0, State) of
-        {error, Reason} ->
+        {error, Reason} when Reason =/= unmodified ->
             throw(Reason);
         Res ->
+            %% Res includes {error, unmodified} which is a non-error return by
+            %% Riak when a Riak Datatype update operation has noop.
             Task1 = reliable_task:set_result(Res, Task0),
             Task = reliable_task:set_status(completed, Task1),
             Work = reliable_work:update_task(TaskId, Task, Work0),
