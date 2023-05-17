@@ -133,12 +133,12 @@ handle_continue({backoff, Reason}, State0) ->
         %% check handle_info/2.
         {noreply, State, hibernate}
     catch
-        error:Reason when Reason == deadline; Reason == max_retries ->
+        error:EReason when EReason == deadline; EReason == max_retries ->
             %% We hit the retry limit, so we stop. This will trigger the
             %% supervisor to restart the worker, so we have the opportunity to
             %% resolve any environmental issues affecting the connection with
             %% the queue which is causing the operations to fail.
-            {stop, Reason, State0}
+            {stop, EReason, State0}
     end;
 
 handle_continue(work, #state{pending_acks = [{Status, Work} | Rest]} = State) ->
