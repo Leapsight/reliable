@@ -253,10 +253,13 @@ local_partitions() ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
--spec partition(Key :: binary() | undefined) -> binary().
+-spec partition(Key :: term() | integer() | undefined) -> binary().
 
 partition(undefined) ->
     do_partition(rand:uniform(maps:size(partition_map())));
+
+partition(Hash) when is_integer(Hash) ->
+    do_partition(Hash);
 
 partition(Key) ->
     do_partition(erlang:phash2(Key)).
