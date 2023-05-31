@@ -821,34 +821,34 @@ notify_task_stop(Status, TaskId, Work, State) ->
 
 
 %% @private
-notify_task_exception(Class, Reason, Stacktrace, TaskId, Work, State) ->
-    %% We must have at least once, otherwise we wouldn't be called
-    [{Status, Work} | _] = State#state.pending_acks,
-    StopTime = erlang:monotonic_time(),
-    StartTime = State#state.work_start_time,
-    WorkRef = reliable_work:ref(State#state.queue_ref, Work),
+%% notify_task_exception(Class, Reason, Stacktrace, TaskId, Work, State) ->
+%%     %% We must have at least once, otherwise we wouldn't be called
+%%     [{Status, Work} | _] = State#state.pending_acks,
+%%     StopTime = erlang:monotonic_time(),
+%%     StartTime = State#state.work_start_time,
+%%     WorkRef = reliable_work:ref(State#state.queue_ref, Work),
 
-    %% Emmit telemetry event
+%%     %% Emmit telemetry event
 
 
-    telemetry:execute(
-        [reliable, task, execute, exception],
-        #{
-            count => 1,
-            duration => StopTime - StartTime,
-            monotonic_time => StopTime,
-            retries => reliable_retry:count(State#state.work_retry)
-        },
-        #{
-            class => Class,
-            reason => Reason,
-            stacktrace => Stacktrace,
-            task_id => TaskId,
-            work_ref => WorkRef,
-            status => Status,
-            partition => State#state.bucket
-        }
-    ).
+%%     telemetry:execute(
+%%         [reliable, task, execute, exception],
+%%         #{
+%%             count => 1,
+%%             duration => StopTime - StartTime,
+%%             monotonic_time => StopTime,
+%%             retries => reliable_retry:count(State#state.work_retry)
+%%         },
+%%         #{
+%%             class => Class,
+%%             reason => Reason,
+%%             stacktrace => Stacktrace,
+%%             task_id => TaskId,
+%%             work_ref => WorkRef,
+%%             status => Status,
+%%             partition => State#state.bucket
+%%         }
+%%     ).
 
 
 
