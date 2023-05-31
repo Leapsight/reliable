@@ -37,7 +37,7 @@
 -define(WORKFLOW_LEVEL, reliable_workflow_level).
 -define(WORKFLOW_GRAPH, reliable_digraph).
 -define(WORKFLOW_EVENT_PAYLOAD, reliable_workflow_event_payload).
-
+-define(WORK_ENQUEUED_EVENT, [reliable, work, enqueue]).
 
 -type enqueue_opts()    ::  #{
                                 work_id => reliable_work:id(),
@@ -45,6 +45,11 @@
                                 event_payload => any(),
                                 subscribe => boolean(),
                                 %% riak_pool:exec_opts()
+                                connection => pid(),
+                                telemetry => #{
+                                    event_name => telemetry:event_name(),
+                                    event_metadata => telemetry:event_metadata()
+                                },
                                 deadline => pos_integer(),
                                 timeout => pos_integer(),
                                 max_retries => non_neg_integer(),
@@ -159,6 +164,7 @@ when is_list(Tasks) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
     EventPayload = maps:get(event_payload, Opts, undefined),
 
     Work = reliable_work:new(WorkId, Tasks, EventPayload),
+
     PartitionKey =
         case maps:get(partition_key, Opts, undefined) of
             undefined ->
@@ -173,11 +179,38 @@ when is_list(Tasks) andalso is_map(Opts) andalso ?IS_TIMEOUT(Timeout) ->
     %% TODO remove false equality when subscriptions are implemented
     false = _Subscribed = maybe_subscribe(WorkRef, Opts),
 
-    try reliable_partition_store:enqueue(StoreRef, Work, Opts, Timeout) of
-        {ok, WorkRef} ->
-            {ok, WorkRef};
-        {error, Reason} ->
-            throw(Reason)
+    %% try reliable_partition_store:enqueue(StoreRef, Work, Opts, Timeout) of
+    %%     {ok, WorkRef} ->
+    %%         {ok, WorkRef};
+    %%     {error, Reason} ->
+    %%         throw(Reason)
+    %% catch
+    %%     %% _:Reason when Subscribed == true ->
+    %%     %%     ok = unsubscribe(WorkRef),
+    %%     %%     {error, Reason};
+    %%     _:Reason ->
+    %%         {error, Reason}
+    %% end,
+
+
+    Metadata = #{
+        work_id => WorkId,
+        work_ref => WorkRef,
+        partition => Partition,
+        payload => EventPayload
+    },
+
+    Fun = fun() ->
+        Result = reliable_partition_store:enqueue(
+            StoreRef, Work, Opts, Timeout
+        ),
+        %% This is the return required bu telemetry:span/3
+        {Result, Metadata}
+    end,
+
+    try
+        telemetry:span(?WORK_ENQUEUED_EVENT, Metadata, Fun)
+
     catch
         %% _:Reason when Subscribed == true ->
         %%     ok = unsubscribe(WorkRef),
@@ -416,7 +449,7 @@ workflow(Fun) ->
 %% between workflow items scheduled at different nesting levels, unless you
 %% explecitly create those relationships by using the
 %% {@link add_workflow_precedence/2} function.
-
+%%
 %% ?> **Note on Nested workflows**
 %% ?> No final scheduling will be done until the top level workflow is
 %% terminated. So, although a nested worflow returns `{true, Result}', if the

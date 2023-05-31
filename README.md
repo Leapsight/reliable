@@ -50,3 +50,108 @@ riak-admin bucket-type activate sets
     ]}
 ]
 ```
+
+
+## Telemetry Events
+
+`reliable` uses the `telemetry` library for instrumentation.
+
+A Telemetry event is made up of the following:
+
+* `name` - A list of atoms that uniquely identifies the event.
+
+* `measurements` - A map of atom keys (e.g. duration) and numeric values.
+
+* `metadata` - A map of key-value pairs that can be used for tagging metrics.
+
+All events time measurements represent time as native units, so to convert the from native units to another unit e.g. `millisecond` you can use:
+
+```erlang
+erlang:convert_time_unit(Value, native, millisecond)
+```
+
+### [reliable, enqueue, start]
+
+##### Measurements
+```erlang
+#{
+    monotonic_time => -576460737043530333,
+    system_time => 1685448802402222902
+}
+```
+
+##### Metadata
+```erlang
+#{
+    partition => <<"babel_test-0_partition_1">>,
+    payload => #{items => [a,b]},
+    telemetry_span_context => #Ref<0.1339438288.4109369345.111931>,
+    work_id => <<"00008LrTASfNp6sFVEPlUcYkIEV">>,
+    work_ref => {reliable_work_ref,'babel_test-0_partition_1',<<"00008LrTASfNp6sFVEPlUcYkIEV">>}
+}
+```
+
+
+### [reliable, enqueue, stop]
+
+##### Measurements
+```erlang
+#{
+    retries => 0,
+    duration => 3944759,
+    monotonic_time => -576460745888161345
+}
+```
+
+##### Metadata
+```erlang
+#{
+    partition => <<"babel_test-0_partition_1">>,
+    payload => #{items => [a,b]},
+    telemetry_span_context => #Ref<0.1339438288.4109369345.111931>,
+    work_id => <<"00008LrTASfNp6sFVEPlUcYkIEV">>,
+    work_ref => {reliable_work_ref,'babel_test-0_partition_1',<<"00008LrTASfNp6sFVEPlUcYkIEV">>}
+}
+```
+
+### [reliable, enqueue, exception]
+
+##### Measurements
+```erlang
+#{
+    duration => 3944759,
+    monotonic_time => -576460745888161345
+}
+```
+
+##### Metadata
+```erlang
+#{
+    class => error,
+    reason => foo,
+    stacktrace => ...,
+    partition => <<"babel_test-0_partition_1">>,
+    payload => #{items => [a,b]},
+    telemetry_span_context => #Ref<0.1339438288.4109369345.111931>,
+    work_id => <<"00008LrTASfNp6sFVEPlUcYkIEV">>,
+    work_ref => {reliable_work_ref,'babel_test-0_partition_1',<<"00008LrTASfNp6sFVEPlUcYkIEV">>}
+}
+```
+
+
+### [reliable, work, execute, start]
+TBD
+### [reliable, work, execute, stop]
+TBD
+### [reliable, work, execute, exception]
+TBD
+
+### [reliable, task, execute, start]
+TBD
+### [reliable, task, execute, stop]
+TBD
+### [reliable, task, execute, exception]
+TBD
+
+
+

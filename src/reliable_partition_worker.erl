@@ -32,19 +32,31 @@
 -define(LIST_MAX_RESULTS, 100).
 
 -record(state, {
+    %% Queue storage
     queue_ref               ::  atom(),
+    %% Partition
     bucket                  ::  binary(),
+    %% Variable substitution
     symbolics = #{}         ::  map(),
+    %% Works not executed yet
     pending = []            ::  [reliable_work:t()],
+    %% Works executed but not yet acked to queue
     pending_acks = []       ::  [{status(), reliable_work:t()}],
-    retry                   ::  reliable_retry:t(),
-    retry_tref              ::  reference() | undefined,
+    %% Current work state
+    work_system_time        ::  optional(pos_integer()),
+    work_start_time         ::  optional(integer()),
+    work_retry              ::  reliable_retry:t(),
+    work_retry_tref         ::  reference() | undefined,
+    %% Current task state
+    task_system_time        ::  optional(pos_integer()),
+    task_start_time         ::  optional(integer()),
     task_retry              ::  reliable_retry:t(),
     task_count = 0          ::  non_neg_integer()
 }).
 
 -type state()               ::  #state{}.
 -type status()              ::  completed | failed.
+-type optional(T)           ::  T | undefined.
 
 %% API
 -export([start_link/3]).
@@ -88,7 +100,7 @@ init([QueueRef, Bucket]) ->
     State = #state{
         queue_ref = QueueRef,
         bucket = Bucket,
-        retry = new_retry(),
+        work_retry = new_work_retry(),
         task_retry = new_task_retry()
     },
 
@@ -138,12 +150,14 @@ handle_continue({backoff, Reason}, State0) ->
             %% supervisor to restart the worker, so we have the opportunity to
             %% resolve any environmental issues affecting the connection with
             %% the queue which is causing the operations to fail.
+
+            ok = notify_work_exception(error, EReason, [], State0),
             {stop, EReason, State0}
     end;
 
 handle_continue(work, #state{pending_acks = [{Status, Work} | Rest]} = State) ->
     %% We have work that we need to acknowledge to queue. This is both when the
-    %% work was completed or when if failed. In both cases the work object will
+    %% work was completed and when it failed. In both cases the work object will
     %% be removed from the queue. In the case of a failed work it will me
     %% published to the DLQ.
     %% We will retry this operation till it works or till we hit the
@@ -161,7 +175,7 @@ handle_continue(work, #state{pending_acks = [{Status, Work} | Rest]} = State) ->
                 work_status => Status,
                 work_id => WorkId
             }),
-            ok = notify(QueueRef, Status, Work),
+            ok = notify_work_stop(Status, Work, State),
             continue(work, State#state{pending_acks = Rest});
 
         {error, Reason} ->
@@ -175,26 +189,28 @@ handle_continue(work, #state{pending_acks = [{Status, Work} | Rest]} = State) ->
             continue({backoff, Reason}, State)
     end;
 
-handle_continue(work, #state{pending = [Work | Rest]} = State0) ->
+handle_continue(work, #state{pending = [Work0 | Rest]} = State0) ->
     %% We have no more elements in pending_acks but we do have some additional
     %% work objects we obtained from a previous ask.
     %% This will go through each of the work's tasks, executing them using a
     %% separate exponential backoff (task_retry). That is, the worker will try
     %% to execute the tasks until completed or
     %% failed.
-    case handle_work(Work, State0) of
-        {Status, _} = Result when Status == completed; Status == failed ->
-            State = State0#state{
+    case handle_work(Work0, State0) of
+        {ok, {Status, _Work} = Result, State1}
+        when Status == completed; Status == failed ->
+            State = State1#state{
                 pending_acks = [Result | State0#state.pending_acks],
                 pending = Rest
             },
+            %% We do not notify here as we need to ack the work to the queue
             continue(work, State);
 
-        {error, Reason, Work} ->
+        {error, Reason, _Work, State} ->
             %% This is a temporary failure (lost riak connection,
             %% connection timeout, overload, etc), so we'll retry the same work
-            %% object using exponential backoff.
-            continue({backoff, Reason}, State0)
+            %% object using exponential backoff. Thus, we do not notify.
+            continue({backoff, Reason}, State)
     end;
 
 handle_continue(work, #state{pending = []} = State) ->
@@ -247,7 +263,7 @@ handle_cast(Event, State) ->
     {noreply, State}.
 
 
-handle_info({timeout, Ref, work}, #state{retry_tref = Ref} = State) ->
+handle_info({timeout, Ref, work}, #state{work_retry_tref = Ref} = State) ->
     %% Do some work
     continue(work, State);
 
@@ -276,7 +292,7 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 %% @private
-new_retry() ->
+new_work_retry() ->
     Tag = work, % fired timeout signal will use this Tag
     Config = reliable_config:get(worker_retry),
     Type = maps:get(backoff_type, Config, jitter),
@@ -315,6 +331,8 @@ new_task_retry() ->
 %% @private
 reset_state(State) ->
     State#state{
+        work_system_time = erlang:system_time(),
+        work_start_time = erlang:monotonic_time(),
         task_retry = new_task_retry(),
         task_count = 0
     }.
@@ -355,10 +373,10 @@ continue(Cmd, State) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-reset_backoff(#state{retry = R0} = State) ->
+reset_backoff(#state{work_retry = R0} = State) ->
     %% We reset the retry strategy
     {_, R1} = reliable_retry:succeed(R0),
-    State#state{retry = R1}.
+    State#state{work_retry = R1}.
 
 
 
@@ -367,7 +385,7 @@ reset_backoff(#state{retry = R0} = State) ->
 %% @doc
 %% @end
 %% -----------------------------------------------------------------------------
-backoff(normal, #state{retry = R0} = State) ->
+backoff(normal, #state{work_retry = R0} = State) ->
     %% We reset the retry strategy
     {Delay, R1} = reliable_retry:succeed(R0),
 
@@ -378,7 +396,7 @@ backoff(normal, #state{retry = R0} = State) ->
 
     fire_backoff(R1, State);
 
-backoff(Reason, #state{retry = R0} = State) ->
+backoff(Reason, #state{work_retry = R0} = State) ->
     {Delay, R1} = reliable_retry:fail(R0),
 
     ?LOG_DEBUG(#{
@@ -393,8 +411,8 @@ backoff(Reason, #state{retry = R0} = State) ->
 %% @private
 fire_backoff(Retry, State) ->
     State#state{
-        retry = Retry,
-        retry_tref = reliable_retry:fire(Retry)
+        work_retry = Retry,
+        work_retry_tref = reliable_retry:fire(Retry)
     }.
 
 
@@ -420,21 +438,29 @@ ask(QueueRef, Opts) ->
 
 %% @private
 -spec handle_work(reliable_work:t(), state()) ->
-    {status(), reliable_work:t()}
-    | {error, Reason :: any(), reliable_work:t()}.
+    {ok, {status(), reliable_work:t()}, state()}
+    | {error, Reason :: any(), reliable_work:t(), state()}.
 
 handle_work(Work, State0) ->
+    %% Start executing work (this might be a work item we have seen before we
+    %% crashed/shutdown and restarted or a brand new one).
+
+    State = reset_state(State0),
+
     ok = logger:update_process_metadata(#{
         reliable_work_id => reliable_work:id(Work)
     }),
 
-    State = reset_state(State0),
+    ok = notify_work_start(Work, State),
 
     try
         handle_work(reliable_work:tasks(Work), Work, State)
+        %% We do not notify exception here as we need to ack the work to the
+        %% queue
     catch
         throw:Reason ->
-            {error, Reason, Work}
+            %% We do not notify exception here as we might retry
+            {error, Reason, Work, State}
     end.
 
 
@@ -453,7 +479,8 @@ handle_work(Work, State0) ->
 %% -----------------------------------------------------------------------------
 -spec handle_work(
     [{pos_integer(), reliable_task:t()}], reliable_work:t(), state()) ->
-    {status(), reliable_work:t()}.
+    {ok, {status(), reliable_work:t()}, state()}
+    | {error, Reason :: any(), reliable_work:t(), state()}.
 
 handle_work([{TaskId, Task0}|T], Work0, State0) ->
     Status = reliable_task:status(Task0),
@@ -474,25 +501,33 @@ handle_work([{TaskId, Task0}|T], Work0, State0) ->
         Status when Status == undefined; Status == failed ->
             %% handle_task/4 will retry the task infinitely only returning an
             %% error in case there is a permanent failure.
-            case handle_task(TaskId, Task0, Work0, State0) of
+            State1 = State0#state{
+                task_start_time = erlang:monotonic_time(),
+                task_system_time = erlang:system_time()
+            },
+            ok = notify_task_start(TaskId, Work0, State1),
+
+            case handle_task(TaskId, Task0, Work0, State1) of
                 {completed, Work} ->
                     %% We store the work using a flow control mechanism.
-                    State = State0#state{
-                        task_count = State0#state.task_count + 1
+                    State = State1#state{
+                        task_count = State1#state.task_count + 1
                     },
                     ok = maybe_store_work(Work, State),
+                    ok = notify_task_stop(completed, TaskId, Work, State),
 
                     %% We continue with next task.
                     handle_work(T, Work, State);
 
-                {failed, _} = Result ->
+                {failed, Work} = Result ->
                     %% We stop
-                    Result
+                    ok = notify_task_stop(failed, TaskId, Work, State1),
+                    {ok, Result, State1}
             end
     end;
 
-handle_work([], Work, _) ->
-    {completed, Work}.
+handle_work([], Work, State) ->
+    {ok, {completed, Work}, State}.
 
 
 %% -----------------------------------------------------------------------------
@@ -667,10 +702,27 @@ replace_symbolics(Args, Symbolics) when is_map(Symbolics) ->
 
 
 %% @private
-notify(QueueRef, Status, Work) ->
-    WorkRef = reliable_work:ref(QueueRef, Work),
+notify_work_start(Work, State) ->
+    telemetry:execute(
+        [reliable, work, execute, start],
+        #{
+            monotonic_time => State#state.work_start_time,
+            system_time => State#state.work_system_time
+        },
+        #{
+            work_ref => reliable_work:ref(State#state.queue_ref, Work),
+            partition => State#state.bucket
+        }
+    ).
+
+%% @private
+notify_work_stop(Status, Work, State) ->
+    StopTime = erlang:monotonic_time(),
+    StartTime = State#state.work_start_time,
+    WorkRef = reliable_work:ref(State#state.queue_ref, Work),
     Payload = reliable_work:event_payload(Work),
 
+    %% Notify subscribers
     Event = {
         reliable_event,
         #{
@@ -680,6 +732,124 @@ notify(QueueRef, Status, Work) ->
         }
     },
 
-    ok = reliable_event_manager:notify(Event).
+    ok = reliable_event_manager:notify(Event),
+
+    %% Emmit telemetry event
+    telemetry:execute(
+        [reliable, work, execute, stop],
+        #{
+            count => 1,
+            duration => StopTime - StartTime,
+            monotonic_time => StopTime,
+            retries => reliable_retry:count(State#state.work_retry)
+        },
+        #{
+            work_ref => WorkRef,
+            status => Status,
+            partition => State#state.bucket
+        }
+    ).
+
+
+%% @private
+notify_work_exception(Class, Reason, Stacktrace, State) ->
+    %% We must have at least once, otherwise we wouldn't be called
+    [{Status, Work} | _] = State#state.pending_acks,
+    StopTime = erlang:monotonic_time(),
+    StartTime = State#state.work_start_time,
+    WorkRef = reliable_work:ref(State#state.queue_ref, Work),
+
+    %% Emmit telemetry event
+
+
+    telemetry:execute(
+        [reliable, work, execute, exception],
+        #{
+            count => 1,
+            duration => StopTime - StartTime,
+            monotonic_time => StopTime,
+            retries => reliable_retry:count(State#state.work_retry)
+        },
+        #{
+            class => Class,
+            reason => Reason,
+            stacktrace => Stacktrace,
+            work_ref => WorkRef,
+            status => Status,
+            partition => State#state.bucket
+        }
+    ).
+
+
+%% @private
+notify_task_start(TaskId, Work, State) ->
+    telemetry:execute(
+        [reliable, task, execute, start],
+        #{
+            monotonic_time => State#state.task_start_time,
+            system_time => State#state.task_system_time
+        },
+        #{
+            task_id => TaskId,
+            work_ref => reliable_work:ref(State#state.queue_ref, Work),
+            partition => State#state.bucket
+        }
+    ).
+
+
+%% @private
+notify_task_stop(Status, TaskId, Work, State) ->
+    StopTime = erlang:monotonic_time(),
+    StartTime = State#state.task_start_time,
+    WorkRef = reliable_work:ref(State#state.queue_ref, Work),
+
+    telemetry:execute(
+        [reliable, task, execute, stop],
+        #{
+            count => 1,
+            duration => StopTime - StartTime,
+            monotonic_time => StopTime,
+            retries => reliable_retry:count(State#state.task_retry)
+        },
+        #{
+            task_id => TaskId,
+            work_ref => WorkRef,
+            status => Status,
+            partition => State#state.bucket
+        }
+    ).
+
+
+%% @private
+notify_task_exception(Class, Reason, Stacktrace, TaskId, Work, State) ->
+    %% We must have at least once, otherwise we wouldn't be called
+    [{Status, Work} | _] = State#state.pending_acks,
+    StopTime = erlang:monotonic_time(),
+    StartTime = State#state.work_start_time,
+    WorkRef = reliable_work:ref(State#state.queue_ref, Work),
+
+    %% Emmit telemetry event
+
+
+    telemetry:execute(
+        [reliable, task, execute, exception],
+        #{
+            count => 1,
+            duration => StopTime - StartTime,
+            monotonic_time => StopTime,
+            retries => reliable_retry:count(State#state.work_retry)
+        },
+        #{
+            class => Class,
+            reason => Reason,
+            stacktrace => Stacktrace,
+            task_id => TaskId,
+            work_ref => WorkRef,
+            status => Status,
+            partition => State#state.bucket
+        }
+    ).
+
+
 
 

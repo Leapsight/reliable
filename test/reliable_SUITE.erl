@@ -1,6 +1,7 @@
 -module(reliable_SUITE).
 -include_lib("common_test/include/ct.hrl").
 -include_lib("stdlib/include/assert.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 
 -compile([nowarn_export_all, export_all]).
@@ -19,8 +20,27 @@ all() ->
 init_per_suite(Config) ->
     %% Allow keylisting.
     application:set_env(riakc, allow_listing, true),
+    application:ensure_all_started(telemetry),
+    telemetry:attach_many(
+        <<"reliable_SUITE">>,
+        [
+            [reliable, work, enqueue, start],
+            [reliable, work, enqueue, stop],
+            [reliable, work, enqueue, exception],
+
+            [reliable, work, execute, start],
+            [reliable, work, execute, stop],
+            [reliable, work, execute, exception],
+
+            [reliable, task, execute, start],
+            [reliable, task, execute, stop],
+            [reliable, task, execute, exception]
+        ],
+        fun ?MODULE:handle_telemetry_event/4,
+        []
+    ),
     application:ensure_all_started(reliable),
-    logger:set_application_level(reliable, debug),
+    logger:set_application_level(reliable, info),
 
     %% meck:new(reliable, [passthrough]),
     %% We remove all work from the queues
@@ -45,6 +65,24 @@ init_per_testcase(Case, _Config) ->
 end_per_testcase(Case, _Config) ->
     ct:pal("Ending test case ~p", [Case]),
     _Config.
+
+
+handle_telemetry_event(EventName, Measurements, Metadata, _Config) ->
+    ?LOG_INFO(
+        "Got telemetry event: ~p~n"
+        "measurements: ~p~n"
+        "metadata: ~p~n",
+        [EventName, Measurements, Metadata]
+    ).
+
+
+
+
+%% =============================================================================
+%% TEST CASES
+%% =============================================================================
+
+
 
 
 basic_test(_Config) ->
@@ -168,8 +206,8 @@ workflow_1_test(_) ->
 
 
 disconnected_workflow_1_test(Config) ->
-    persistent_term:put({?MODULE, disconnected}, 3),
 
+    persistent_term:put({?MODULE, disconnected}, 3),
 
     meck:expect(reliable_partition_worker, store_work,
         fun(QueueRef, Work) ->
