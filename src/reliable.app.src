@@ -15,6 +15,7 @@
         cache,
         backoff,
         riakc,
+        telemetry,
         riak_pool
     ]},
     {env,[]},
